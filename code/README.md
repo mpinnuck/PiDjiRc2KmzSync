@@ -3,7 +3,8 @@
 Flask-based relay app for the Pi. Shares its core sync logic with the
 desktop app [`DJI_RC2_KMZsync`](https://github.com/mpinnuck/DJI_RC2_KMZsync)
 — most of the files under `backends/`, `model/`, and `services/` are
-ported directly from that app's source, since that logic turned out to
+ported directly from that app's source, since the app was designed with a
+single role, single responsibility, the logic turned out to
 be platform-independent pure Python.
 
 MTP (via `pymtp`/`libmtp`) is the only connection path this relay uses.
