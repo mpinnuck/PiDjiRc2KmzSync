@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiDjiRc2KmzSync</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <span class="app-version">Version 0.1.0</span>
+        <h1>PiDjiRc2KmzSync</h1>
+        <p id="status">Checking RC-2 connection...</p>
+    </header>
+
+    <section id="config-bar">
+        <details>
+            <summary>Configuration</summary>
+            <div class="config-row">
+                <label for="rc2-root-input">RC-2 root (mtp: path)</label>
+                <input type="text" id="rc2-root-input" placeholder="mtp:DJI RC 2|Internal shared storage|Android|data|dji.go.v5|files|waypoint">
+                <button id="save-rc2-root-btn">Save</button>
+            </div>
+            <div class="config-row">
+                <label>Dummy mission slot</label>
+                <span id="dummy-slot-display">(none set)</span>
+                <button id="set-dummy-slot-btn">Set selected RC-2 mission as dummy</button>
+            </div>
+            <div class="config-row">
+                <label>PC / Cloud folder</label>
+                <span id="pc-folder-display">(none chosen)</span>
+                <button id="choose-pc-folder-btn">Choose folder...</button>
+                <span id="pc-folder-note" class="note"></span>
+            </div>
+        </details>
+    </section>
+
+    <main class="three-pane">
+        <section id="rc2-pane" class="pane">
+            <div class="pane-header">
+                <h2>RC-2 Missions</h2>
+                <button id="refresh-missions-btn">Refresh</button>
+            </div>
+            <ul id="mission-list" class="tree"></ul>
+        </section>
+
+        <section id="pc-pane" class="pane">
+            <div class="pane-header">
+                <h2>PC / Cloud KMZ Files</h2>
+                <button id="refresh-pc-btn">Refresh</button>
+            </div>
+            <ul id="pc-tree" class="tree"></ul>
+        </section>
+
+        <section id="preview-pane" class="pane">
+            <div class="pane-header">
+                <h2>Mission Preview</h2>
+            </div>
+            <div id="preview-image-wrap">
+                <img id="preview-image" alt="" style="display:none;">
+                <p id="preview-placeholder">Select an RC-2 mission to preview it.</p>
+            </div>
+            <dl id="preview-info"></dl>
+        </section>
+    </main>
+
+    <section id="action-bar">
+        <button id="copy-btn">Copy selected KMZ &rarr; RC-2</button>
+        <button id="download-btn">Copy RC-2 mission &rarr; selected PC file</button>
+        <button id="associate-btn">Associate mission &harr; PC file</button>
+        <p id="action-result"></p>
+    </section>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+{
+    "updated_at": "2026-09-13 17:55:48",
+    "note": "This map tracks file-level copy operations only. If RC-2 is opened with 'adjust/open as new', DJI app metadata may create a new mission record that diverges from this mapping.",
+    "by_source": {
+        "BannistersPS.kmz": {
+            "history": [
+                {
+                    "copied_at": "2026-09-13 17:53:46",
+                    "source_filename": "BannistersPS.kmz",
+                    "source_full_path": "BannistersPS.kmz",
+                    "target_mission_guid": "4CBD4C69-0313-4AB9-8377-7229E5D3F71A",
+                    "target_kmz_filename": "4CBD4C69-0313-4AB9-8377-7229E5D3F71A.kmz",
+                    "target_folder_path": "mtp:DJI RC 2|Internal shared storage|Android|data|dji.go.v5|files|waypoint|4CBD4C69-0313-4AB9-8377-7229E5D3F71A",
+                    "connection_mode": "MTP"
+                }
+            ],
+            "last": {
+                "copied_at": "2026-09-13 17:53:46",
+                "source_filename": "BannistersPS.kmz",
+                "source_full_path": "BannistersPS.kmz",
+                "target_mission_guid": "4CBD4C69-0313-4AB9-8377-7229E5D3F71A",
+                "target_kmz_filename": "4CBD4C69-0313-4AB9-8377-7229E5D3F71A.kmz",
+                "target_folder_path": "mtp:DJI RC 2|Internal shared storage|Android|data|dji.go.v5|files|waypoint|4CBD4C69-0313-4AB9-8377-7229E5D3F71A",
+                "connection_mode": "MTP"
+            }
+        },
+        "brickpitt-vs-wp.kmz": {
+            "history": [
+                {
+                    "copied_at": "2026-09-13 17:55:48",
+                    "source_filename": "brickpitt-vs-wp.kmz",
+                    "source_full_path": "brickpitt-vs-wp.kmz",
+                    "target_mission_guid": "72950189-FF00-4A94-BFDF-6EDA1645DF13",
+                    "target_kmz_filename": "72950189-FF00-4A94-BFDF-6EDA1645DF13.kmz",
+                    "target_folder_path": "mtp:DJI RC 2|Internal shared storage|Android|data|dji.go.v5|files|waypoint|72950189-FF00-4A94-BFDF-6EDA1645DF13",
+                    "connection_mode": "MTP"
+                }
+            ],
+            "last": {
+                "copied_at": "2026-09-13 17:55:48",
+                "source_filename": "brickpitt-vs-wp.kmz",
+                "source_full_path": "brickpitt-vs-wp.kmz",
+                "target_mission_guid": "72950189-FF00-4A94-BFDF-6EDA1645DF13",
+                "target_kmz_filename": "72950189-FF00-4A94-BFDF-6EDA1645DF13.kmz",
+                "target_folder_path": "mtp:DJI RC 2|Internal shared storage|Android|data|dji.go.v5|files|waypoint|72950189-FF00-4A94-BFDF-6EDA1645DF13",
+                "connection_mode": "MTP"
+            }
+        }
+    }
+}

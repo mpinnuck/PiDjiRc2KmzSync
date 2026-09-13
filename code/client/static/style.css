@@ -1,0 +1,222 @@
+body {
+    font-family: -apple-system, system-ui, sans-serif;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem;
+    color: #222;
+}
+
+header {
+    position: relative;
+}
+
+.app-version {
+    position: absolute;
+    top: 0;
+    right: 0;
+    color: #888;
+    font-size: 0.7rem;
+}
+
+header h1 {
+    font-size: 1.4rem;
+    margin-bottom: 0.25rem;
+}
+
+#status {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+#config-bar {
+    margin: 1rem 0;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+.config-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin: 0.5rem 0;
+}
+
+.config-row label {
+    min-width: 140px;
+    font-size: 0.85rem;
+    color: #444;
+}
+
+.config-row input[type="text"] {
+    flex: 1;
+    min-width: 200px;
+    padding: 0.3rem;
+}
+
+.note {
+    font-size: 0.75rem;
+    color: #999;
+}
+
+.three-pane {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.three-pane #rc2-pane,
+.three-pane #pc-pane {
+    flex: 1.2;
+}
+
+.three-pane #preview-pane {
+    flex: 1;
+}
+
+.pane {
+    min-width: 0;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 0.5rem;
+}
+
+.pane-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.pane-header h2 {
+    font-size: 1rem;
+    margin: 0;
+}
+
+ul.tree {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+ul.tree ul {
+    list-style: none;
+    padding-left: 1.1rem;
+}
+
+ul.tree li {
+    padding: 0.3rem 0.2rem;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+ul.tree li.folder {
+    cursor: default;
+    font-weight: 600;
+    color: #555;
+    border-bottom: none;
+}
+
+ul.tree li.selected {
+    background: #e8f0fe;
+    border-radius: 4px;
+}
+
+ul.tree li.dummy-slot {
+    background: #f5f5f5;
+}
+
+ul.tree li.mission.selected {
+    background: #e8f0fe;
+}
+
+ul.tree li .meta {
+    display: block;
+    font-size: 0.75rem;
+    color: #888;
+}
+
+/* Mission list thumbnails (left pane) */
+ul.tree li.mission {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+ul.tree li.mission .thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: #eee;
+    flex-shrink: 0;
+}
+
+ul.tree li.mission .mission-text {
+    min-width: 0;
+    flex: 1;
+}
+
+/* Preview pane (right) */
+#preview-image-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 220px;
+    background: #f5f5f5;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+#preview-image {
+    max-width: 100%;
+    max-height: 320px;
+    display: block;
+}
+
+#preview-placeholder {
+    color: #999;
+    font-size: 0.85rem;
+    padding: 1rem;
+    text-align: center;
+}
+
+#preview-info {
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+#preview-info dt {
+    color: #888;
+    margin-top: 0.4rem;
+}
+
+#preview-info dd {
+    margin: 0 0 0 0;
+    font-weight: 500;
+    word-break: break-word;
+}
+
+#action-bar {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+button {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.9rem;
+}
+
+#action-result {
+    font-size: 0.85rem;
+    color: #444;
+    margin: 0;
+}
