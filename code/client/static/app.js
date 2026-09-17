@@ -53,18 +53,63 @@ let lastMissionsData = [];       // last /api/missions response, for the preview
 let copyMapByGuid = {};          // target_mission_guid (lowercased) -> summary row
 
 // ---------------------------------------------------------------------
+// Activity log
+// ---------------------------------------------------------------------
+function logMessage(level, message) {
+    const logEl = document.getElementById("activity-log");
+    if (!logEl) return;
+    const timestamp = new Date().toLocaleTimeString();
+    logEl.value += `[${timestamp}] ${level.toUpperCase()}: ${message}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function logInfo(message) {
+    logMessage("info", message);
+}
+
+function logWarning(message) {
+    logMessage("warning", message);
+}
+
+function logError(message) {
+    logMessage("error", message);
+}
+
+async function copyActivityLog() {
+    const logText = document.getElementById("activity-log").value;
+    try {
+        await navigator.clipboard.writeText(logText);
+        logInfo("Activity log copied to clipboard.");
+    } catch (err) {
+        const logEl = document.getElementById("activity-log");
+        logEl.focus();
+        logEl.select();
+        document.execCommand("copy");
+        logInfo("Activity log copied to clipboard.");
+    }
+}
+
+function clearActivityLog() {
+    document.getElementById("activity-log").value = "";
+    logInfo("Activity log cleared.");
+}
+
+// ---------------------------------------------------------------------
 // Status / config
 // ---------------------------------------------------------------------
 async function refreshStatus() {
     const statusEl = document.getElementById("status");
+    logInfo("Checking RC-2 connection status.");
     try {
         const res = await fetch("/api/status");
         const data = await res.json();
         statusEl.textContent = data.connected
             ? `RC-2 connected (${data.connection_mode})`
             : `RC-2 not connected (root: ${data.rc2_root || "not set"})`;
+        logInfo(statusEl.textContent);
     } catch (err) {
         statusEl.textContent = "Error checking status";
+        logError(`Status check failed: ${err.message}`);
     }
 }
 
@@ -75,35 +120,53 @@ async function loadConfig() {
         document.getElementById("rc2-root-input").value = data.rc2_root || "";
         document.getElementById("dummy-slot-display").textContent =
             data.dummy_slot_guid || "(none set)";
+        logInfo("Configuration loaded.");
     } catch (err) {
-        // leave fields blank on error
+        logError(`Configuration load failed: ${err.message}`);
     }
 }
 
 async function saveRc2Root() {
     const root = document.getElementById("rc2-root-input").value.trim();
-    if (!root) return;
-    await fetch("/api/config/rc2-root", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ root }),
-    });
-    refreshStatus();
+    if (!root) {
+        logWarning("Save RC-2 root ignored: no root was entered.");
+        return;
+    }
+    try {
+        const res = await fetch("/api/config/rc2-root", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ root }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        logInfo(`RC-2 root saved: ${root}`);
+        refreshStatus();
+    } catch (err) {
+        logError(`Saving RC-2 root failed: ${err.message}`);
+    }
 }
 
 async function setDummySlot() {
     if (!selectedMissionGuid) {
         setActionResult("Select an RC-2 mission first, then set it as the dummy slot.");
+        logWarning("Set dummy slot ignored: no RC-2 mission is selected.");
         return;
     }
-    const res = await fetch("/api/config/dummy-slot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ guid: selectedMissionGuid }),
-    });
-    const data = await res.json();
-    document.getElementById("dummy-slot-display").textContent = data.dummy_slot_guid || "(none set)";
-    refreshMissions();
+    try {
+        const res = await fetch("/api/config/dummy-slot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ guid: selectedMissionGuid }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        document.getElementById("dummy-slot-display").textContent = data.dummy_slot_guid || "(none set)";
+        logInfo(`Dummy mission slot set to ${selectedMissionGuid}.`);
+        refreshMissions();
+    } catch (err) {
+        logError(`Setting dummy slot failed: ${err.message}`);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -118,8 +181,9 @@ async function loadCopyMap() {
             const guid = (row.target_mission_guid || "").toLowerCase();
             if (guid) copyMapByGuid[guid] = row;
         }
+        logInfo("Mission associations loaded.");
     } catch (err) {
-        // leave copyMapByGuid as-is on error
+        logError(`Mission association load failed: ${err.message}`);
     }
 }
 
@@ -128,6 +192,7 @@ async function loadCopyMap() {
 // ---------------------------------------------------------------------
 async function refreshMissions(showLoading = true) {
     const listEl = document.getElementById("mission-list");
+    logInfo("Refreshing RC-2 missions.");
     if (showLoading) {
         listEl.innerHTML = "<li>Loading...</li>";
     }
@@ -139,6 +204,7 @@ async function refreshMissions(showLoading = true) {
         if (data.error) {
             listEl.innerHTML = `<li>${data.error}</li>`;
             lastMissionsData = [];
+            logWarning(`RC-2 mission list warning: ${data.error}`);
             return;
         }
 
@@ -170,6 +236,9 @@ async function refreshMissions(showLoading = true) {
 
             li.addEventListener("click", () => {
                 selectedMissionGuid = (selectedMissionGuid === mission.guid) ? null : mission.guid;
+                logInfo(selectedMissionGuid
+                    ? `Selected RC-2 mission ${selectedMissionGuid}.`
+                    : "RC-2 mission selection cleared; dummy slot will be used.");
                 document.querySelectorAll("#mission-list li.mission").forEach(row => {
                     row.classList.toggle("selected", row.dataset.guid === selectedMissionGuid);
                 });
@@ -184,6 +253,7 @@ async function refreshMissions(showLoading = true) {
     } catch (err) {
         listEl.innerHTML = "<li>Error loading missions.</li>";
         lastMissionsData = [];
+        logError(`Loading RC-2 missions failed: ${err.message}`);
     }
 }
 
@@ -243,9 +313,10 @@ async function choosePcFolder() {
             await saveDirHandle(handle);
             document.getElementById("pc-folder-display").textContent = handle.name;
             document.getElementById("pc-folder-note").textContent = "";
+            logInfo(`PC/Cloud folder selected: ${handle.name}.`);
             renderPcTree();
         } catch (err) {
-            // user cancelled the picker; nothing to do
+            logWarning(`PC/Cloud folder picker cancelled or failed: ${err.message}`);
         }
         return;
     }
@@ -262,6 +333,7 @@ function handleFallbackFolderPick(fileList) {
     // sessions is possible with this fallback (Safari does not support the
     // File System Access API), so this must be re-chosen each visit.
     const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".kmz"));
+    logInfo(`PC/Cloud folder loaded with ${files.length} KMZ file(s).`);
     const treeEl = document.getElementById("pc-tree");
     treeEl.innerHTML = "";
     for (const file of files) {
@@ -272,6 +344,7 @@ function handleFallbackFolderPick(fileList) {
             // so this selection can be an upload source but not a
             // Copy RC-2 -> PC overwrite target (see copyRc2ToPc()).
             selectedPcFile = { name: file.name, getFile: async () => file, handle: null };
+            logInfo(`Selected PC/Cloud file ${file.name}.`);
             renderPcSelectionHighlight(li);
         });
         treeEl.appendChild(li);
@@ -295,6 +368,7 @@ async function renderPcTree() {
 
     const rootUl = await buildTreeForDirHandle(pcDirHandle);
     treeEl.appendChild(rootUl);
+    logInfo("PC/Cloud folder refreshed.");
 }
 
 async function buildTreeForDirHandle(dirHandle, depth = 0) {
@@ -320,6 +394,7 @@ async function buildTreeForDirHandle(dirHandle, depth = 0) {
             li.textContent = name;
             li.addEventListener("click", () => {
                 selectedPcFile = { name, getFile: () => handle.getFile(), handle };
+                logInfo(`Selected PC/Cloud file ${name}.`);
                 renderPcSelectionHighlight(li);
             });
             ul.appendChild(li);
@@ -338,10 +413,12 @@ function setActionResult(text) {
 async function copySelectedToRc2() {
     if (!selectedPcFile) {
         setActionResult("Select a PC/Cloud KMZ file first.");
+        logWarning("Copy to RC-2 ignored: no PC/Cloud KMZ file is selected.");
         return;
     }
 
     setActionResult("Copying...");
+    logInfo(`Copying ${selectedPcFile.name} to RC-2.`);
     try {
         const file = await selectedPcFile.getFile();
         const formData = new FormData();
@@ -356,23 +433,28 @@ async function copySelectedToRc2() {
         const data = await res.json();
         if (data.error) {
             setActionResult(`Error: ${data.error}`);
+            logError(`Copy to RC-2 failed: ${data.error}`);
             return;
         }
         setActionResult(`Copied to mission ${data.mission_guid} as ${data.dest_filename}`);
+        logInfo(`Copied to mission ${data.mission_guid} as ${data.dest_filename}.`);
         refreshMissions();
         loadCopyMap();
     } catch (err) {
         setActionResult("Copy failed.");
+        logError(`Copy to RC-2 failed: ${err.message}`);
     }
 }
 
 async function copyRc2ToPc() {
     if (!selectedMissionGuid) {
         setActionResult("Select an RC-2 mission first.");
+        logWarning("Copy to PC ignored: no RC-2 mission is selected.");
         return;
     }
     if (!selectedPcFile) {
         setActionResult("Select a target file in the PC/Cloud folder tree first.");
+        logWarning("Copy to PC ignored: no target PC/Cloud file is selected.");
         return;
     }
 
@@ -382,16 +464,19 @@ async function copyRc2ToPc() {
         // is a plain browser download rather than overwriting the chosen
         // file in place.
         setActionResult("Can't write directly to the selected file in this browser -- downloading instead.");
+        logWarning("Selected browser cannot overwrite the PC/Cloud file; starting a browser download instead.");
         window.location.href = `/api/download/${encodeURIComponent(selectedMissionGuid)}`;
         return;
     }
 
     setActionResult("Copying...");
+    logInfo(`Copying RC-2 mission ${selectedMissionGuid} to ${selectedPcFile.name}.`);
     try {
         const res = await fetch(`/api/download/${encodeURIComponent(selectedMissionGuid)}`);
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
             setActionResult(`Error: ${data.error || res.statusText}`);
+            logError(`Copy from RC-2 failed: ${data.error || res.statusText}`);
             return;
         }
         const blob = await res.blob();
@@ -399,6 +484,7 @@ async function copyRc2ToPc() {
         const permission = await selectedPcFile.handle.requestPermission({ mode: "readwrite" });
         if (permission !== "granted") {
             setActionResult("Write permission was not granted for the selected file.");
+            logWarning("Copy from RC-2 cancelled: write permission was not granted.");
             return;
         }
 
@@ -407,22 +493,27 @@ async function copyRc2ToPc() {
         await writable.close();
 
         setActionResult(`Copied RC-2 mission ${selectedMissionGuid} into ${selectedPcFile.name}`);
+        logInfo(`Copied RC-2 mission ${selectedMissionGuid} into ${selectedPcFile.name}.`);
     } catch (err) {
         setActionResult("Copy failed.");
+        logError(`Copy from RC-2 failed: ${err.message}`);
     }
 }
 
 async function associateSelected() {
     if (!selectedMissionGuid) {
         setActionResult("Select an RC-2 mission first.");
+        logWarning("Association ignored: no RC-2 mission is selected.");
         return;
     }
     if (!selectedPcFile) {
         setActionResult("Select a PC/Cloud file first.");
+        logWarning("Association ignored: no PC/Cloud file is selected.");
         return;
     }
 
     setActionResult("Associating...");
+    logInfo(`Associating mission ${selectedMissionGuid} with ${selectedPcFile.name}.`);
     try {
         const res = await fetch(`/api/missions/${encodeURIComponent(selectedMissionGuid)}/associate`, {
             method: "POST",
@@ -435,14 +526,17 @@ async function associateSelected() {
         const data = await res.json();
         if (data.error) {
             setActionResult(`Error: ${data.error}`);
+            logError(`Mission association failed: ${data.error}`);
             return;
         }
         setActionResult(data.message || "Associated.");
+        logInfo(data.message || "Mission association saved.");
         await loadCopyMap();
         await refreshMissions(false);
         renderPreviewPane();
     } catch (err) {
         setActionResult("Associate failed.");
+        logError(`Mission association failed: ${err.message}`);
     }
 }
 
@@ -457,6 +551,23 @@ document.getElementById("refresh-pc-btn").addEventListener("click", renderPcTree
 document.getElementById("copy-btn").addEventListener("click", copySelectedToRc2);
 document.getElementById("download-btn").addEventListener("click", copyRc2ToPc);
 document.getElementById("associate-btn").addEventListener("click", associateSelected);
+document.getElementById("copy-log-btn").addEventListener("click", copyActivityLog);
+document.getElementById("clear-log-btn").addEventListener("click", clearActivityLog);
+
+document.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (button && !["copy-log-btn", "clear-log-btn"].includes(button.id)) {
+        logInfo(`Action started: ${button.textContent.trim()}`);
+    }
+});
+
+window.addEventListener("error", (event) => {
+    logError(`Uncaught error: ${event.message}`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+    logError(`Unhandled promise rejection: ${event.reason?.message || event.reason}`);
+});
 
 if (!supportsDirectoryPicker) {
     // Inject a hidden webkitdirectory input for the Safari/iOS fallback path.
@@ -470,6 +581,7 @@ if (!supportsDirectoryPicker) {
 }
 
 (async function init() {
+    logInfo("Application started.");
     await loadConfig();
     await refreshStatus();
     await loadCopyMap();
