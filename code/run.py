@@ -2,8 +2,9 @@
 run.py
 
 Entry point for PiDjiRc2KmzSync. For development, this runs Flask's
-built-in dev server. For deployment on the Pi as a systemd service,
-use gunicorn instead, e.g.:
+built-in dev server. For production on the Pi, this isn't invoked
+directly -- see pidjirc2kmzsync.service, which runs gunicorn instead
+as a user-level systemd unit that starts automatically on boot:
 
     gunicorn -w 1 -b 0.0.0.0:8000 "flask_app.app:create_app()"
 

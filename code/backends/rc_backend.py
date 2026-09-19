@@ -9,7 +9,8 @@ primitives (_raw_*) that perform the actual device communication.
 
 Hierarchy (this project):
     RCBackend (concrete base -- all orchestration here)
-    └── LinuxMTPBackend    -- _raw_* via pymtp (libmtp)
+    ├── MacMTPBackend      -- _raw_* via pymtp (libmtp)
+    └── PiMTPBackend       -- _raw_* via pymtp (libmtp)
 
 Thread safety:
     Subclasses are responsible for any internal locking their _raw_*

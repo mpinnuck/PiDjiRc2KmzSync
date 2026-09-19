@@ -9,6 +9,23 @@ be platform-independent pure Python.
 
 MTP (via `pymtp`/`libmtp`) is the only connection path this relay uses.
 
+## Motivation
+
+The goal of this project is to make it possible to update a DJI RC-2
+mission while working at a remote location. A mission can be exported from
+[DJI Mission Planner](https://github.com/mpinnuck/DjiMissionPlanner.git) as a
+KMZ file, placed in an iCloud folder, and then
+uploaded from an iPad, iPhone, or other browser-connected device to the RC-2
+through this Raspberry Pi relay. The modified mission can then be copied
+back from the RC-2 to the selected PC/Cloud file when needed.
+
+The field workflow is intentionally simple: the Raspberry Pi provides the
+local connection to the RC-2, while the browser device provides the user
+interface and access to the iCloud file. The only outside connectivity
+required is internet access, typically through a mobile phone hotspot. This
+avoids needing a fixed site network or mains-powered computer at the remote
+location.
+
 ## What's real vs. what's new vs. what's a stub
 
 **Ported verbatim (no changes needed — pure Python, no OS-specific calls):**
@@ -22,8 +39,14 @@ MTP (via `pymtp`/`libmtp`) is the only connection path this relay uses.
   `services/copy_map_service.py`, `services/mission_verification_service.py`
 
 **New for this relay — real, substantive port (not a stub), but needs bench testing:**
-- `backends/mtp/linux_mtp_backend.py` — ported from the desktop app's
-  `MacMTPBackend`. Both use the same `pymtp`/`libmtp` stack, since
+- `backends/mtp/mac_mtp_backend.py` — the preserved macOS concrete MTP
+  implementation. This is the backend selected when the app runs on macOS.
+- `backends/mtp/pi_mtp_backend.py` — an independent clone of the macOS
+  implementation for Raspberry Pi Debian/Linux. Pi-specific USB and libmtp
+  changes can now be made here without changing the working Mac backend.
+- `backends/mtp/linux_mtp_backend.py` — the original Linux implementation
+  retained for compatibility while the split backends are validated.
+  The Mac and Pi backends use the same `pymtp`/`libmtp` stack, since
   libmtp is a cross-platform native library, so nearly all of the
   session management, folder/file tree traversal and caching, and the
   chunked `GetPartialObject` read logic (RC-2 blocks plain MTP
@@ -42,8 +65,8 @@ MTP (via `pymtp`/`libmtp`) is the only connection path this relay uses.
   **This has not been tested against real RC-2 hardware yet** — the
   logic is a faithful, reasoned port of working code, not a stub, but
   treat it as unverified until bench-tested with a Pi + RC-2 over USB-C.
-- `backends/backend_factory.py` — adapted: Linux-only, `mtp:` roots
-  only.
+- `backends/backend_factory.py` — selects `MacMTPBackend` on macOS and
+  `PiMTPBackend` on Linux for `mtp:` roots.
 - `config/config_manager.py` — adapted: keeps `rc2_folder` and
   `dummy_slot_guid` (server-side, since they describe the RC-2 device
   itself), drops `pc_folder` entirely. The "PC/Cloud" folder is owned
@@ -58,11 +81,12 @@ MTP (via `pymtp`/`libmtp`) is the only connection path this relay uses.
   slot, or `<slot GUID>.kmz` for an empty slot) reuses
   `SyncEngine.resolve_destination_filename` unchanged, and MTP copy
   verification reuses `MissionVerificationService` unchanged.
-- `flask_app/` and `client/static/` — the web UI: a two-pane layout
-  (RC-2 missions on the left, PC/Cloud KMZ folder tree on the right),
-  matching the requirements below. Each UUID mission row includes its
-  available preview image to make mission identification easier; selecting
-  a row keeps it highlighted and shows a larger preview with its details.
+- `flask_app/` and `client/static/` — the web UI: a three-pane layout
+  (RC-2 missions, PC/Cloud KMZ folder tree, and mission preview). Each UUID
+  mission row includes its available preview image to make mission
+  identification easier; selecting a row keeps it highlighted and shows a
+  larger preview with its details. The preview opens in a full-screen
+  lightbox when clicked.
 
 ## Dummy-slot copy behavior (as implemented)
 
@@ -82,11 +106,11 @@ Ported from the desktop app's exact `_on_copy` / `execute_copy` logic:
 
 | # | Requirement | Status |
 |---|---|---|
-| 1 | Connect to DJI RC-2 | `LinuxMTPBackend` — real port, needs bench testing |
-| 2 | Read/write KMZ mission files | `RCBackend` + `LinuxMTPBackend` primitives — real port, needs bench testing |
+| 1 | Connect to DJI RC-2 | `MacMTPBackend` on macOS / `PiMTPBackend` on Linux — needs bench testing |
+| 2 | Read/write KMZ mission files | `RCBackend` + platform-specific MTP primitives — needs bench testing |
 | 3 | Act as WiFi access point | Not part of this app — RaspAP, configured at OS level |
 | 4 | Operate in WiFi station mode | Not part of this app — RaspAP, configured at OS level |
-| 5 | Browser-compatible UI | Two-pane layout in `client/static/` |
+| 5 | Browser-compatible UI | Three-pane layout in `client/static/`, with activity logging and preview lightbox |
 | 6 | Copy KMZ from iCloud to RC-2, with dummy-slot fallback | `/api/upload` + dummy-slot resolution in `MissionViewModel` |
 | 7 | Display RC-2 missions | `/api/missions` — mission list with dummy slot highlighted, plus a small thumbnail per mission (`/api/missions/<guid>/thumbnail`, backed by `RCBackend.get_preview_path` unchanged) and a larger preview panel on the right showing the selected mission's thumbnail, GUID, KMZ name, and any linked PC/Cloud file |
 | 8 | Copy KMZ from RC-2 back to iPad/iCloud | `/api/download/<guid>` fetched client-side and written into the file selected in the PC/Cloud folder tree, overwriting it in place (desktop Chrome/Edge, via `FileSystemFileHandle.createWritable()`). Falls back to a plain browser download when no writable handle is available (Safari, or a file picked via the `webkitdirectory` fallback input) |
@@ -99,11 +123,19 @@ needs to overwrite a file in place, not just read it) where supported
 (desktop Chrome/Edge), persisting the chosen folder's handle in
 IndexedDB so it survives across sessions without re-prompting (subject
 to the browser re-confirming permission). Safari (iPad/iPhone) doesn't
-support this API, so there the folder must be re-chosen each session
-via a plain `<input type="file" webkitdirectory>` picker — this
-fallback can supply an upload source but can't be an overwrite target,
-since it yields no `FileSystemFileHandle`; the UI notes both
-limitations when they apply.
+support this API at all, so there the folder must be re-chosen each
+session via a plain `<input type="file" webkitdirectory>` picker.
+
+That fallback still renders a real expandable tree, not a flat list:
+`webkitdirectory` gives each file a `webkitRelativePath` string (e.g.
+`Air3s/Home/TestMission.kmz`), and `buildFolderTreeFromFiles()` in
+`app.js` groups those paths into the same nested folder/file structure
+the real API's `buildTreeForDirHandle()` produces — pure string
+splitting, no filesystem API involved, so it renders identically on
+iPad Safari as on desktop. What the fallback still can't do is persist
+the choice across sessions or serve as a **Copy RC-2 → PC** overwrite
+target, since neither is possible without a real `FileSystemFileHandle`
+— the UI notes both limitations when they apply.
 
 ## Mission thumbnails and mission <-> PC file associations
 
@@ -126,23 +158,31 @@ limitations when they apply.
   so the UI can show them next to each mission and in the preview
   panel.
 
+## Production deployment (systemd + gunicorn)
+
+The relay runs in production as `pidjirc2kmzsync.service`, a user-level
+systemd unit (see that file's own comments for the one-time setup:
+install the unit, `systemctl --user enable --now`, and `sudo loginctl
+enable-linger mark` once so it starts at boot without an interactive
+login). Deliberately user-level rather than system-level, so ongoing
+deploys never need sudo.
+
+`deploy.sh` does not restart the service by default. Use
+`./deploy.sh --restart` when Python code changes. The equivalent Make
+commands are `make deploy RESTART=1` and `make deploy-restart`.
+The `--pip` option reinstalls Python requirements when dependencies change.
+One thing that isn't automatic: if `pidjirc2kmzsync.service` itself
+changes (not just the app code), it needs re-copying to
+`~/.config/systemd/user/` and a `systemctl --user daemon-reload` by
+hand, since deploy.sh only syncs it into the app folder, not the
+systemd unit directory.
+
 ## Next steps
 
-1. **Bench-test `LinuxMTPBackend` against a real RC-2** once the Pi and
-   USB-C cabling are in hand. This is the critical unknown: confirm
-   `pymtp`/`libmtp` install cleanly on Raspberry Pi OS
-   (`sudo apt install libmtp-dev && pip install pymtp`), that the RC-2
-   enumerates over USB without any developer/debug mode needed, and
-   that the `GetPartialObject` chunked-read workaround behaves the same
-   as it does on macOS.
-2. If read/write operations show the same session flakiness the Mac
-   version needed extra retries for, port more of
-   `MacMTPBackend._raw_read_file`'s nested retry logic back in (see
-   `linux_mtp_backend.py`'s module docstring for what was simplified).
-3. Flash Raspberry Pi OS Lite, install `libmtp-dev`/`pymtp`, set up
-   RaspAP, deploy this app, wire up as a systemd service running
-   gunicorn (single worker — only one process should hold the MTP/USB
-   session at a time).
+1. If read/write operations show MTP session flakiness, tune
+  `PiMTPBackend` independently without changing the working
+  `MacMTPBackend`.
+2. Set up RaspAP for WiFi AP/station-mode switching in the field.
 
 ## Current development notes
 
@@ -156,6 +196,11 @@ limitations when they apply.
   selected UUID remains highlighted while its larger preview is displayed.
 - Associating a mission with a PC/Cloud KMZ refreshes the linked metadata
   without clearing the mission list or losing the current selection.
+- The activity log records actions, warnings, errors, connection status,
+  file names, and copy results. It is scrollable and can be copied to the
+  clipboard.
+- The RC-2 connection status is shown as white text on green when connected
+  and white text on red when disconnected or unavailable.
 
 ## Running (dev)
 
@@ -166,3 +211,18 @@ python run.py
 ```
 
 Then visit `http://<pi-ip>:8000` from a browser on the same network.
+
+## Make commands
+
+Run these from the `code/` directory:
+
+```bash
+make deploy
+make deploy RESTART=1
+make deploy-restart
+make zip
+```
+
+`make deploy` syncs updated application files without restarting the service.
+Use one of the restart forms after Python changes. `make zip` creates the
+source archive from the repository root.

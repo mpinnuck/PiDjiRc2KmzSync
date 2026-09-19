@@ -8,7 +8,7 @@
 </head>
 <body>
     <header>
-        <span class="app-version">Version 0.2.0</span>
+        <span class="app-version">Version 2.0.0</span>
         <h1>PiDjiRc2KmzSync</h1>
         <p id="status">Checking RC-2 connection...</p>
     </header>
@@ -63,6 +63,11 @@
             <dl id="preview-info"></dl>
         </section>
     </main>
+
+    <div id="image-lightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="Large mission preview" hidden>
+        <button id="close-lightbox-btn" class="lightbox-close" type="button" aria-label="Close large preview">&times;</button>
+        <img id="lightbox-image" alt="Large mission preview">
+    </div>
 
     <section id="action-bar">
         <button id="copy-btn">Copy selected KMZ &rarr; RC-2</button>

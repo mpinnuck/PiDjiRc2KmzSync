@@ -94,6 +94,23 @@ function clearActivityLog() {
     logInfo("Activity log cleared.");
 }
 
+function openImageLightbox() {
+    const previewImage = document.getElementById("preview-image");
+    if (previewImage.style.display === "none" || !previewImage.src) return;
+    const lightbox = document.getElementById("image-lightbox");
+    document.getElementById("lightbox-image").src = previewImage.src;
+    lightbox.hidden = false;
+    document.getElementById("close-lightbox-btn").focus();
+    logInfo("Opened large mission preview.");
+}
+
+function closeImageLightbox() {
+    const lightbox = document.getElementById("image-lightbox");
+    if (lightbox.hidden) return;
+    lightbox.hidden = true;
+    document.getElementById("preview-image").focus();
+}
+
 // ---------------------------------------------------------------------
 // Status / config
 // ---------------------------------------------------------------------
@@ -103,11 +120,15 @@ async function refreshStatus() {
     try {
         const res = await fetch("/api/status");
         const data = await res.json();
+        statusEl.classList.toggle("status-connected", data.connected);
+        statusEl.classList.toggle("status-disconnected", !data.connected);
         statusEl.textContent = data.connected
             ? `RC-2 connected (${data.connection_mode})`
             : `RC-2 not connected (root: ${data.rc2_root || "not set"})`;
         logInfo(statusEl.textContent);
     } catch (err) {
+        statusEl.classList.remove("status-connected");
+        statusEl.classList.add("status-disconnected");
         statusEl.textContent = "Error checking status";
         logError(`Status check failed: ${err.message}`);
     }
@@ -328,27 +349,77 @@ async function choosePcFolder() {
     input.click();
 }
 
-function handleFallbackFolderPick(fileList) {
-    // Build a simple flat list from webkitRelativePath; no persistence across
-    // sessions is possible with this fallback (Safari does not support the
-    // File System Access API), so this must be re-chosen each visit.
-    const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".kmz"));
-    logInfo(`PC/Cloud folder loaded with ${files.length} KMZ file(s).`);
-    const treeEl = document.getElementById("pc-tree");
-    treeEl.innerHTML = "";
+function buildFolderTreeFromFiles(files) {
+    // Groups a flat FileList (each with webkitRelativePath, e.g.
+    // "Air3s/Home/TestMission.kmz") into a nested tree structure, purely
+    // by splitting that path string -- no filesystem API involved, so this
+    // works identically in every browser, iPad Safari included.
+    const root = { folders: new Map(), files: [] };
     for (const file of files) {
+        const relPath = file.webkitRelativePath || file.name;
+        const segments = relPath.split("/").filter(Boolean);
+        segments.shift(); // drop the chosen root folder's own name, so this
+                           // tree's shape matches buildTreeForDirHandle's
+                           // (children of the chosen folder, not a wrapping
+                           // node for the folder itself)
+        const fileName = segments.pop() || file.name;
+        let node = root;
+        for (const segment of segments) {
+            if (!node.folders.has(segment)) {
+                node.folders.set(segment, { folders: new Map(), files: [] });
+            }
+            node = node.folders.get(segment);
+        }
+        node.files.push({ name: fileName, file });
+    }
+    return root;
+}
+
+function renderFolderTreeNode(node) {
+    const ul = document.createElement("ul");
+
+    const folderNames = Array.from(node.folders.keys()).sort((a, b) => a.localeCompare(b));
+    for (const folderName of folderNames) {
         const li = document.createElement("li");
-        li.textContent = file.webkitRelativePath || file.name;
+        li.classList.add("folder");
+        li.textContent = folderName;
+        li.appendChild(renderFolderTreeNode(node.folders.get(folderName)));
+        ul.appendChild(li);
+    }
+
+    const sortedFiles = node.files.slice().sort((a, b) => a.name.localeCompare(b.name));
+    for (const { name, file } of sortedFiles) {
+        const li = document.createElement("li");
+        li.textContent = name;
         li.addEventListener("click", () => {
             // No FileSystemFileHandle is available from this fallback input,
             // so this selection can be an upload source but not a
             // Copy RC-2 -> PC overwrite target (see copyRc2ToPc()).
-            selectedPcFile = { name: file.name, getFile: async () => file, handle: null };
-            logInfo(`Selected PC/Cloud file ${file.name}.`);
+            selectedPcFile = { name, getFile: async () => file, handle: null };
+            logInfo(`Selected PC/Cloud file ${name}.`);
             renderPcSelectionHighlight(li);
         });
-        treeEl.appendChild(li);
+        ul.appendChild(li);
     }
+
+    return ul;
+}
+
+function handleFallbackFolderPick(fileList) {
+    // Build a real nested tree from webkitRelativePath. This is just string
+    // splitting on data the fallback input already gives us -- it doesn't
+    // need the File System Access API, so it renders identically on iPad
+    // Safari as on desktop, unlike the tree persistence and Copy RC-2 -> PC
+    // overwrite-in-place features below, which genuinely do need a real
+    // FileSystemFileHandle and so stay desktop Chrome/Edge only.
+    const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".kmz"));
+    logInfo(`PC/Cloud folder loaded with ${files.length} KMZ file(s).`);
+    const treeEl = document.getElementById("pc-tree");
+    treeEl.innerHTML = "";
+
+    const tree = buildFolderTreeFromFiles(files);
+    treeEl.appendChild(renderFolderTreeNode(tree));
+
     document.getElementById("pc-folder-display").textContent = "(chosen this session only)";
     document.getElementById("pc-folder-note").textContent =
         "Your browser doesn't support persistent folder access; re-choose the folder each visit. " +
@@ -418,7 +489,12 @@ async function copySelectedToRc2() {
     }
 
     setActionResult("Copying...");
-    logInfo(`Copying ${selectedPcFile.name} to RC-2.`);
+    const destinationMission = selectedMissionGuid
+        ? lastMissionsData.find(mission => mission.guid === selectedMissionGuid)
+        : lastMissionsData.find(mission => mission.is_dummy);
+    const destinationName = destinationMission?.display_kmz_name ||
+        `${destinationMission?.guid || "dummy slot"}.kmz (resolved by RC-2)`;
+    logInfo(`Copy selected KMZ -> RC-2: ${selectedPcFile.name} -> ${destinationName}`);
     try {
         const file = await selectedPcFile.getFile();
         const formData = new FormData();
@@ -553,10 +629,18 @@ document.getElementById("download-btn").addEventListener("click", copyRc2ToPc);
 document.getElementById("associate-btn").addEventListener("click", associateSelected);
 document.getElementById("copy-log-btn").addEventListener("click", copyActivityLog);
 document.getElementById("clear-log-btn").addEventListener("click", clearActivityLog);
+document.getElementById("preview-image").addEventListener("click", openImageLightbox);
+document.getElementById("close-lightbox-btn").addEventListener("click", closeImageLightbox);
+document.getElementById("image-lightbox").addEventListener("click", (event) => {
+    if (event.target.id === "image-lightbox") closeImageLightbox();
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeImageLightbox();
+});
 
 document.addEventListener("click", (event) => {
     const button = event.target.closest("button");
-    if (button && !["copy-log-btn", "clear-log-btn"].includes(button.id)) {
+    if (button && !["copy-log-btn", "clear-log-btn", "copy-btn"].includes(button.id)) {
         logInfo(`Action started: ${button.textContent.trim()}`);
     }
 });

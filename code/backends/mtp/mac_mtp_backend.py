@@ -1,7 +1,7 @@
 """
-linux_mtp_backend.py
+mac_mtp_backend.py
 ---------------------
-Linux (Raspberry Pi) MTP backend -- implements the nine _raw_* primitives
+Mac MTP backend -- implements the nine _raw_* primitives
 via pymtp (libmtp). Ported from the desktop app's MacMTPBackend
 (backends/mtp/mac_mtp_backend.py), which uses the same pymtp/libmtp
 stack -- libmtp is a cross-platform native library, so the vast majority
@@ -181,9 +181,9 @@ def _walk_folder_tree(root_ptr):
             stack.append(node.child)
 
 
-class LinuxMTPBackend(RCBackend):
+class MacMTPBackend(RCBackend):
     """
-    Linux MTP backend using pymtp (libmtp). Implements the nine
+    Mac MTP backend using pymtp (libmtp). Implements the nine
     _raw_* primitives; all orchestration lives in RCBackend.
     """
 

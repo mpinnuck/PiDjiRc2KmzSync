@@ -8,7 +8,10 @@ MTP is the only connection path this relay uses.
 
 from __future__ import annotations
 
-from backends.mtp.linux_mtp_backend import LinuxMTPBackend
+import platform
+
+from backends.mtp.mac_mtp_backend import MacMTPBackend
+from backends.mtp.pi_mtp_backend import PiMTPBackend
 from backends.rc_backend import RCBackend
 from backends.unavailable_rc_backend import UnavailableRCBackend
 from config.config_manager import ConfigManager
@@ -28,12 +31,15 @@ class BackendFactory:
         scheme = BackendFactory.path_scheme(cleaned)
 
         if scheme == "mtp":
-            return LinuxMTPBackend(config)
+            backend_class = (
+                MacMTPBackend if platform.system() == "Darwin" else PiMTPBackend
+            )
+            return backend_class(config)
 
         if not cleaned:
             return UnavailableRCBackend(
                 "No RC-2 path configured yet. Set an 'mtp:' path to continue, "
-                f"e.g. {LinuxMTPBackend.DEFAULT_ROOT}"
+                f"e.g. {PiMTPBackend.DEFAULT_ROOT}"
             )
 
         return UnavailableRCBackend(
