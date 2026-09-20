@@ -8,9 +8,12 @@
 </head>
 <body>
     <header>
-        <span class="app-version">Version 2.0.0</span>
+        <span class="app-version">Version 2.2.0</span>
         <h1>PiDjiRc2KmzSync</h1>
-        <p id="status">Checking RC-2 connection...</p>
+        <div class="connection-status-row">
+            <p id="status" class="status-disconnected">Checking RC-2 connection...</p>
+            <p id="pi-status" class="status-disconnected">PiRC2kmzUpdater not connected</p>
+        </div>
     </header>
 
     <section id="config-bar">
@@ -87,6 +90,6 @@
         <textarea id="activity-log" readonly aria-label="Activity log"></textarea>
     </section>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2.2.0"></script>
 </body>
 </html>

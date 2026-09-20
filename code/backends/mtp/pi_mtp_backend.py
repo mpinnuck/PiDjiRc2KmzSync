@@ -472,11 +472,15 @@ class PiMTPBackend(RCBackend):
         if not self._available:
             return False
         try:
-            with self._session():
+            # Check USB enumeration before reusing the current session. A
+            # cable removal can leave pymtp's session object marked connected
+            # even though the RC-2 has disappeared from the USB bus.
+            with self._connection_lock:
                 devices = self._quiet(self._mtp.detect_devices)
                 if not devices:
                     self._disconnect()
                     return False
+            with self._session():
                 self._folder_cache = None
                 self._folders_by_parent_cache = None
                 exists = self._waypoint_folder_exists()

@@ -10,6 +10,8 @@
 const DB_NAME = "pidjirc2kmzsync";
 const STORE_NAME = "handles";
 const HANDLE_KEY = "pc-cloud-folder";
+const STATUS_POLL_INTERVAL_MS = 10000;
+const STATUS_WATCHDOG_TIMEOUT_MS = STATUS_POLL_INTERVAL_MS * 1.5;
 
 function openHandleDb() {
     return new Promise((resolve, reject) => {
@@ -51,6 +53,9 @@ let selectedMissionGuid = null;  // null = "use dummy slot"
 let selectedPcFile = null;       // { name, getFile: () => Promise<File>, handle: FileSystemFileHandle|null }
 let lastMissionsData = [];       // last /api/missions response, for the preview pane
 let copyMapByGuid = {};          // target_mission_guid (lowercased) -> summary row
+let statusRefreshInProgress = false;
+let lastKnownConnectionState = null;
+let piStatusWatchdogTimer = null;
 
 // ---------------------------------------------------------------------
 // Activity log
@@ -114,23 +119,64 @@ function closeImageLightbox() {
 // ---------------------------------------------------------------------
 // Status / config
 // ---------------------------------------------------------------------
+function setPiStatus(connected) {
+    const piStatusEl = document.getElementById("pi-status");
+    piStatusEl.classList.toggle("status-connected", connected);
+    piStatusEl.classList.toggle("status-disconnected", !connected);
+    piStatusEl.textContent = connected
+        ? "PiRC2kmzUpdater connected"
+        : "PiRC2kmzUpdater not connected";
+}
+
+function armPiStatusWatchdog() {
+    if (piStatusWatchdogTimer !== null) {
+        window.clearTimeout(piStatusWatchdogTimer);
+    }
+    piStatusWatchdogTimer = window.setTimeout(() => {
+        setPiStatus(false);
+    }, STATUS_WATCHDOG_TIMEOUT_MS);
+}
+
 async function refreshStatus() {
+    if (statusRefreshInProgress) return;
+    statusRefreshInProgress = true;
     const statusEl = document.getElementById("status");
-    logInfo("Checking RC-2 connection status.");
     try {
         const res = await fetch("/api/status");
+        if (!res.ok) throw new Error(`Status request failed (${res.status})`);
         const data = await res.json();
+        setPiStatus(true);
+        armPiStatusWatchdog();
+        const connectionStateChanged = (
+            lastKnownConnectionState !== null &&
+            lastKnownConnectionState !== data.connected
+        );
+        if (lastKnownConnectionState === true && !data.connected) {
+            logWarning("RC-2 connection lost.");
+        } else if (lastKnownConnectionState === false && data.connected) {
+            logInfo("RC-2 connection re-established.");
+        }
+        lastKnownConnectionState = data.connected;
         statusEl.classList.toggle("status-connected", data.connected);
         statusEl.classList.toggle("status-disconnected", !data.connected);
         statusEl.textContent = data.connected
             ? `RC-2 connected (${data.connection_mode})`
             : `RC-2 not connected (root: ${data.rc2_root || "not set"})`;
-        logInfo(statusEl.textContent);
+        if (connectionStateChanged) {
+            refreshMissions(false);
+        }
     } catch (err) {
+        if (lastKnownConnectionState === true) {
+            logWarning("RC-2 connection lost: status check failed.");
+        }
+        lastKnownConnectionState = false;
         statusEl.classList.remove("status-connected");
         statusEl.classList.add("status-disconnected");
         statusEl.textContent = "Error checking status";
-        logError(`Status check failed: ${err.message}`);
+        // The Pi badge is controlled by the watchdog so polling continues
+        // and a later successful response can restore the green state.
+    } finally {
+        statusRefreshInProgress = false;
     }
 }
 
@@ -666,6 +712,7 @@ if (!supportsDirectoryPicker) {
 
 (async function init() {
     logInfo("Application started.");
+    window.setInterval(refreshStatus, STATUS_POLL_INTERVAL_MS);
     await loadConfig();
     await refreshStatus();
     await loadCopyMap();
