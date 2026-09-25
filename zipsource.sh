@@ -9,7 +9,7 @@ cd "$project_root"
 
 rm -f "$archive_name"
 
-zip -r "$archive_name" README.md code mechanical \
+zip -r "$archive_name" README.md code \
     -x '*.venv/*' \
        '*/.venv/*' \
        '*/__pycache__/*' \

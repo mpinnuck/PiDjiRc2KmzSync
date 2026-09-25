@@ -17,6 +17,11 @@ Adapted from the desktop app's ConfigManager. Two differences:
 and `dummy_slot_guid` (an existing RC-2 mission GUID used as the upload
 target when no mission is explicitly selected) remain server-side config,
 since they describe the RC-2 device state itself, not the browsing client.
+
+The PowerBoost 1000C's LBO (Low Battery Output) GPIO pin is NOT here --
+it's a fixed hardware wiring choice, not something that changes at
+runtime, so it's a plain constant in
+services/battery_monitor_service.py instead.
 """
 
 import json

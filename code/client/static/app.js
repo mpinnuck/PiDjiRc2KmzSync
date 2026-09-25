@@ -55,6 +55,7 @@ let lastMissionsData = [];       // last /api/missions response, for the preview
 let copyMapByGuid = {};          // target_mission_guid (lowercased) -> summary row
 let statusRefreshInProgress = false;
 let lastKnownConnectionState = null;
+let lastKnownLowBattery = null;
 let piStatusWatchdogTimer = null;
 
 // ---------------------------------------------------------------------
@@ -141,6 +142,7 @@ async function refreshStatus() {
     if (statusRefreshInProgress) return;
     statusRefreshInProgress = true;
     const statusEl = document.getElementById("status");
+    const batteryEl = document.getElementById("battery-status");
     try {
         const res = await fetch("/api/status");
         if (!res.ok) throw new Error(`Status request failed (${res.status})`);
@@ -162,6 +164,21 @@ async function refreshStatus() {
         statusEl.textContent = data.connected
             ? `RC-2 connected (${data.connection_mode})`
             : `RC-2 not connected (root: ${data.rc2_root || "not set"})`;
+
+        // low_battery is null when the GPIO monitor isn't available (e.g.
+        // running the dev server on a Mac, or gpiozero/lgpio missing on the
+        // Pi) -- treat that as "unknown", not "battery is fine", and only
+        // log the unavailability once rather than on every poll.
+        if (data.low_battery === true && lastKnownLowBattery !== true) {
+            logWarning("PowerBoost LBO reports low battery.");
+        } else if (data.low_battery === false && lastKnownLowBattery === true) {
+            logInfo("Battery no longer reported as low.");
+        } else if (data.battery_monitor_available === false && lastKnownLowBattery === null) {
+            logWarning("Battery monitor unavailable (check LBO GPIO wiring/config).");
+        }
+        lastKnownLowBattery = data.low_battery;
+        batteryEl.classList.toggle("battery-low", data.low_battery === true);
+
         if (connectionStateChanged) {
             refreshMissions(false);
         }

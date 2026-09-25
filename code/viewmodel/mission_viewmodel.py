@@ -26,6 +26,7 @@ from backends.backend_factory import BackendFactory
 from config.config_manager import ConfigManager
 from model.kmz_file import KMZFile
 from model.rc2_mission import RC2Mission
+from services.battery_monitor_service import BatteryMonitorService
 from services.copy_map_service import CopyMapService
 from services.mission_verification_service import MissionVerificationService
 from services.sync_engine import SyncEngine
@@ -41,6 +42,7 @@ class MissionViewModel:
         self._sync_engine = SyncEngine()
         self._copy_map_service = CopyMapService()
         self._verification_service = MissionVerificationService()
+        self._battery_monitor = BatteryMonitorService()
         self._last_error: str | None = None
 
     # ------------------------------------------------------------------
@@ -73,6 +75,21 @@ class MissionViewModel:
 
     def get_status(self) -> Tuple[bool, str]:
         return self._rc_backend.get_status()
+
+    # ------------------------------------------------------------------
+    # Battery (LBO -- Low Battery Output from the PowerBoost 1000C)
+    # ------------------------------------------------------------------
+
+    def get_battery_status(self) -> Dict[str, Any]:
+        """Returns a dict with:
+            low_battery: True/False, or None if the monitor is unavailable
+            battery_monitor_available: whether the GPIO read is working at all
+        A None low_battery should be treated by callers as "unknown", not
+        as "battery is fine" -- see BatteryMonitorService.is_low_battery."""
+        return {
+            "low_battery": self._battery_monitor.is_low_battery(),
+            "battery_monitor_available": self._battery_monitor.is_available(),
+        }
 
     # ------------------------------------------------------------------
     # Dummy slot config

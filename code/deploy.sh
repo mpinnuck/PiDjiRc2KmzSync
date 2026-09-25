@@ -60,7 +60,9 @@ fi
 log "$REMOTE_HOST is reachable."
 
 # --- Rsync -----------------------------------------------------------------
-RSYNC_FLAGS=(-avz --delete)
+# Preserve destination-only files; deploys are additive updates rather than
+# exact mirror operations.
+RSYNC_FLAGS=(-avz)
 if $DRY_RUN; then
   RSYNC_FLAGS+=(--dry-run)
   log "DRY RUN — no files will actually be changed."

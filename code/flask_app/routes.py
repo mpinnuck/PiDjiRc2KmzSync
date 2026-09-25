@@ -8,7 +8,7 @@ response. No RCBackend / MTP-specific logic should ever appear here.
 Endpoints
 ---------
 GET  /                              -> UI shell
-GET  /api/status                    -> RC-2 connection status
+GET  /api/status                    -> RC-2 connection status + battery low flag
 GET  /api/config                    -> rc2_root, dummy_slot_guid
 POST /api/config/rc2-root           -> { root: "mtp:DJI RC 2|..." }
 POST /api/config/dummy-slot         -> { guid: "<existing RC-2 mission GUID>" }
@@ -53,10 +53,13 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/status")
     def status():
+        battery = viewmodel.get_battery_status()
         return jsonify({
             "connected": viewmodel.is_connected(timeout_seconds=3),
             "connection_mode": viewmodel.get_connection_mode(),
             "rc2_root": viewmodel.get_rc2_root(),
+            "low_battery": battery["low_battery"],
+            "battery_monitor_available": battery["battery_monitor_available"],
         })
 
     @app.route("/api/config", methods=["GET"])

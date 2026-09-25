@@ -114,6 +114,7 @@ Ported from the desktop app's exact `_on_copy` / `execute_copy` logic:
 | 6 | Copy KMZ from iCloud to RC-2, with dummy-slot fallback | `/api/upload` + dummy-slot resolution in `MissionViewModel` |
 | 7 | Display RC-2 missions | `/api/missions` — mission list with dummy slot highlighted, plus a small thumbnail per mission (`/api/missions/<guid>/thumbnail`, backed by `RCBackend.get_preview_path` unchanged) and a larger preview panel on the right showing the selected mission's thumbnail, GUID, KMZ name, and any linked PC/Cloud file |
 | 8 | Copy KMZ from RC-2 back to iPad/iCloud | `/api/download/<guid>` fetched client-side and written into the file selected in the PC/Cloud folder tree, overwriting it in place (desktop Chrome/Edge, via `FileSystemFileHandle.createWritable()`). Falls back to a plain browser download when no writable handle is available (Safari, or a file picked via the `webkitdirectory` fallback input) |
+| 9 | Battery low warning | PowerBoost 1000C's LBO pin wired to a Pi GPIO input (see below); `/api/status`'s `low_battery` field drives an amber badge in the header |
 
 ## PC/Cloud folder browsing (right pane)
 
@@ -157,6 +158,48 @@ target, since neither is possible without a real `FileSystemFileHandle`
   re-transferring it. `/api/copy-map` returns the current associations
   so the UI can show them next to each mission and in the preview
   panel.
+
+## Battery low warning (LBO)
+
+`services/battery_monitor_service.py` reads the PowerBoost 1000C's LBO
+(Low Battery Output) pin via a Pi GPIO input, so the web UI can show a
+low-battery warning without needing to poll the battery voltage itself.
+
+**Wiring — not a direct connection.** Per Adafruit's own documentation,
+LBO is actively pulled to BAT voltage (up to ~4.2V) when the battery is
+fine, not floating, and is explicitly "not suitable for direct
+connection to 3.3V logic GPIO." The actual circuit, verified against
+Adafruit's own forum guidance for this exact pin:
+- A 100k ohm resistor from the Pi's 3.3V pin to the GPIO input (BCM
+  GPIO4 / physical pin 7 — the `LBO_GPIO_PIN` constant in
+  `battery_monitor_service.py`; a fixed hardware wiring choice, not a
+  runtime setting).
+- A diode in series between that same GPIO node and LBO, anode toward
+  the GPIO/resistor node, cathode toward LBO.
+
+When LBO is high (battery fine), the diode is reverse-biased and blocks
+it — the GPIO pin only ever sees the safe 3.3V from its own resistor.
+When LBO goes low (battery low), the diode conducts and lets LBO pull
+the GPIO node down, which reads as a low input.
+
+**Software.** Uses `gpiozero` (the current Raspberry Pi Foundation
+recommendation) rather than the older `RPi.GPIO`, since `RPi.GPIO`'s
+direct `/dev/mem` access doesn't work reliably on Debian Trixie's
+gpiochip character-device model. Degrades gracefully rather than
+crashing when there's no real GPIO backend available — e.g. running the
+dev server on a Mac, or before `python3-lgpio` is installed on the Pi —
+in which case `/api/status`'s `low_battery` field is `null` (unknown),
+not `false` (battery fine), and the UI logs a one-time warning instead
+of showing a false "all clear."
+
+**On the Pi (not needed for Mac-side dev):**
+```
+sudo apt install python3-lgpio
+```
+
+**UI**: an amber "⚠ Battery low" badge appears next to the RC-2/Pi
+connection status pills in the header, only when `low_battery === true`
+— hidden otherwise, including the "unknown" case.
 
 ## Production deployment (systemd + gunicorn)
 
@@ -206,6 +249,7 @@ systemd unit directory.
 
 ```bash
 cd code
+source .venv/bin/activate
 pip install -r requirements.txt
 python run.py
 ```

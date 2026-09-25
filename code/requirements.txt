@@ -1,3 +1,10 @@
 Flask>=3.0
 pymtp>=0.0.6
 gunicorn>=23.0
+gpiozero>=2.0
+# On the Pi (not needed for Mac-side dev): sudo apt install python3-lgpio
+# gpiozero itself is pure Python and installs fine on any platform; it's
+# the actual GPIO backend (lgpio) that's Pi/Linux-only, so it's deliberately
+# left out of this cross-platform requirements file -- see
+# services/battery_monitor_service.py for how the app degrades gracefully
+# when it isn't installed.
