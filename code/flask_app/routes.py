@@ -8,6 +8,8 @@ response. No RCBackend / MTP-specific logic should ever appear here.
 Endpoints
 ---------
 GET  /                              -> UI shell
+GET  /api/ping                      -> liveness only (no MTP, no locks): drives the
+                                        "updater connected" badge
 GET  /api/status                    -> RC-2 connection status + battery low flag
 GET  /api/config                    -> rc2_root, dummy_slot_guid
 POST /api/config/rc2-root           -> { root: "mtp:DJI RC 2|..." }
@@ -32,6 +34,7 @@ DELETE /api/missions/<guid>/kmz     -> clear a mission slot's KMZ (optional extr
 
 import os
 import tempfile
+import threading
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
@@ -51,15 +54,38 @@ def register_routes(app: Flask) -> None:
     # Status / config
     # ------------------------------------------------------------------
 
+    # Liveness only. This must never touch MTP, the viewmodel or any lock:
+    # the UI's "updater connected" badge is driven by it, and it has to keep
+    # answering promptly even while a slow MTP operation is in progress.
+    @app.route("/api/ping")
+    def ping():
+        return jsonify({"ok": True})
+
+    # The RC-2 probe goes through the MTP session lock, so it can wait behind
+    # a long transfer. Only one status poll probes at a time; any poll that
+    # arrives meanwhile returns the last known RC-2 state (flagged "stale")
+    # instead of tying up another server thread waiting on the same lock.
+    status_probe_lock = threading.Lock()
+    last_rc2_state = {"connected": False, "mode": viewmodel.get_connection_mode()}
+
     @app.route("/api/status")
     def status():
         battery = viewmodel.get_battery_status()
+        stale = True
+        if status_probe_lock.acquire(blocking=False):
+            try:
+                last_rc2_state["connected"] = viewmodel.is_connected(timeout_seconds=3)
+                last_rc2_state["mode"] = viewmodel.get_connection_mode()
+                stale = False
+            finally:
+                status_probe_lock.release()
         return jsonify({
-            "connected": viewmodel.is_connected(timeout_seconds=3),
-            "connection_mode": viewmodel.get_connection_mode(),
+            "connected": last_rc2_state["connected"],
+            "connection_mode": last_rc2_state["mode"],
             "rc2_root": viewmodel.get_rc2_root(),
             "low_battery": battery["low_battery"],
             "battery_monitor_available": battery["battery_monitor_available"],
+            "stale": stale,
         })
 
     @app.route("/api/config", methods=["GET"])

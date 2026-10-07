@@ -56,6 +56,7 @@ let copyMapByGuid = {};          // target_mission_guid (lowercased) -> summary 
 let statusRefreshInProgress = false;
 let lastKnownConnectionState = null;
 let lastKnownLowBattery = null;
+let batteryUnavailableLogged = false;
 let piStatusWatchdogTimer = null;
 
 // ---------------------------------------------------------------------
@@ -138,6 +139,26 @@ function armPiStatusWatchdog() {
     }, STATUS_WATCHDOG_TIMEOUT_MS);
 }
 
+// The "updater connected" badge answers one question only: is the Pi's web
+// server responding? It polls /api/ping, which never touches MTP, so a slow
+// RC-2 operation can't make it flap. RC-2 state comes from /api/status.
+let pingInProgress = false;
+async function pingServer() {
+    if (pingInProgress) return;
+    pingInProgress = true;
+    try {
+        const res = await fetch("/api/ping", { cache: "no-store" });
+        if (!res.ok) throw new Error(`Ping failed (${res.status})`);
+        setPiStatus(true);
+        armPiStatusWatchdog();
+    } catch (err) {
+        // Leave the badge to the watchdog: polling continues, and the next
+        // successful ping restores the green state.
+    } finally {
+        pingInProgress = false;
+    }
+}
+
 async function refreshStatus() {
     if (statusRefreshInProgress) return;
     statusRefreshInProgress = true;
@@ -147,8 +168,6 @@ async function refreshStatus() {
         const res = await fetch("/api/status");
         if (!res.ok) throw new Error(`Status request failed (${res.status})`);
         const data = await res.json();
-        setPiStatus(true);
-        armPiStatusWatchdog();
         const connectionStateChanged = (
             lastKnownConnectionState !== null &&
             lastKnownConnectionState !== data.connected
@@ -173,8 +192,12 @@ async function refreshStatus() {
             logWarning("PowerBoost LBO reports low battery.");
         } else if (data.low_battery === false && lastKnownLowBattery === true) {
             logInfo("Battery no longer reported as low.");
-        } else if (data.battery_monitor_available === false && lastKnownLowBattery === null) {
+        }
+        if (data.battery_monitor_available === false && !batteryUnavailableLogged) {
             logWarning("Battery monitor unavailable (check LBO GPIO wiring/config).");
+            batteryUnavailableLogged = true;
+        } else if (data.battery_monitor_available === true) {
+            batteryUnavailableLogged = false;
         }
         lastKnownLowBattery = data.low_battery;
         batteryEl.classList.toggle("battery-low", data.low_battery === true);
@@ -729,7 +752,9 @@ if (!supportsDirectoryPicker) {
 
 (async function init() {
     logInfo("Application started.");
+    window.setInterval(pingServer, STATUS_POLL_INTERVAL_MS);
     window.setInterval(refreshStatus, STATUS_POLL_INTERVAL_MS);
+    pingServer();
     await loadConfig();
     await refreshStatus();
     await loadCopyMap();

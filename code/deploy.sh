@@ -20,6 +20,7 @@ REMOTE_USER="mark"
 REMOTE_HOST="rc2kmzupdater.lan"
 REMOTE_PATH="~/PiDjiRc2KmzSync"
 REMOTE_VENV="~/PiDjiRc2KmzSync/.venv"
+SSH_OPTIONS=(-o ClearAllForwardings=yes)
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -87,7 +88,7 @@ EXCLUDES=(
 )
 
 log "Syncing to $REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH ..."
-rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" ./ "$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
+rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" -e "ssh -o ClearAllForwardings=yes" ./ "$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
 
 if $DRY_RUN; then
   log "Dry run complete. Nothing was deployed."
@@ -97,7 +98,7 @@ fi
 # --- Post-deploy: reinstall requirements only if --pip was passed --------
 if $DO_PIP; then
   log "Reinstalling requirements on the Pi..."
-  ssh "$REMOTE_USER@$REMOTE_HOST" "source $REMOTE_VENV/bin/activate && pip install -q -r $REMOTE_PATH/requirements.txt"
+  ssh "${SSH_OPTIONS[@]}" "$REMOTE_USER@$REMOTE_HOST" "source $REMOTE_VENV/bin/activate && pip install -q -r $REMOTE_PATH/requirements.txt"
   log "Requirements up to date."
 else
   log "Skipping pip install (pass --pip if requirements.txt changed)."
@@ -107,7 +108,7 @@ fi
 # User-level systemd unit (see pidjirc2kmzsync.service) -- no sudo needed.
 if $DO_RESTART; then
   log "Restarting pidjirc2kmzsync service on the Pi..."
-  ssh "$REMOTE_USER@$REMOTE_HOST" "systemctl --user restart pidjirc2kmzsync"
+  ssh "${SSH_OPTIONS[@]}" "$REMOTE_USER@$REMOTE_HOST" "systemctl --user restart pidjirc2kmzsync"
 else
   log "Skipping service restart (pass --restart if .py code changed)."
 fi

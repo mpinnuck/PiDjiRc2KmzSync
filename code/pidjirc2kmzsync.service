@@ -17,6 +17,10 @@
 # needs no sudo at all, and the service comes up automatically on every
 # reboot without an interactive SSH session.
 #
+# One worker process (only one process may hold the MTP/USB session), but 16
+# threads inside it, so a slow MTP operation can't stop /api/ping answering.
+# MTP calls themselves are still serialized by the backend's session lock.
+#
 # Day to day:
 #     systemctl --user status pidjirc2kmzsync
 #     journalctl --user -u pidjirc2kmzsync -f
@@ -29,7 +33,7 @@ After=network.target
 [Service]
 WorkingDirectory=%h/PiDjiRc2KmzSync
 Environment=PYTHONUNBUFFERED=1
-ExecStart=%h/PiDjiRc2KmzSync/.venv/bin/gunicorn -w 1 -b 0.0.0.0:8000 "flask_app.app:create_app()"
+ExecStart=%h/PiDjiRc2KmzSync/.venv/bin/gunicorn -w 1 --threads 16 -b 0.0.0.0:8000 "flask_app.app:create_app()"
 Restart=on-failure
 RestartSec=3
 
