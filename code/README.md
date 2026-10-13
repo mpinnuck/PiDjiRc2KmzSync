@@ -211,14 +211,12 @@ login). Deliberately user-level rather than system-level, so ongoing
 deploys never need sudo.
 
 `deploy.sh` does not restart the service by default. Use
-`./deploy.sh --restart` when Python code changes. The equivalent Make
-commands are `make deploy RESTART=1` and `make deploy-restart`.
+`./deploy.sh --restart` when Python code or the systemd unit configuration changes.
+The equivalent Make commands are `make deploy RESTART=1` and `make deploy-restart`.
 The `--pip` option reinstalls Python requirements when dependencies change.
-One thing that isn't automatic: if `pidjirc2kmzsync.service` itself
-changes (not just the app code), it needs re-copying to
-`~/.config/systemd/user/` and a `systemctl --user daemon-reload` by
-hand, since deploy.sh only syncs it into the app folder, not the
-systemd unit directory.
+When `--restart` is passed, `deploy.sh` also automatically updates the unit file in
+`~/.config/systemd/user/` and executes `systemctl --user daemon-reload` before restarting,
+so any changes to unit settings (e.g. ExecStart flags or threads) take effect immediately.
 
 ## Next steps
 

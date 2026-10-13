@@ -108,7 +108,10 @@ fi
 # User-level systemd unit (see pidjirc2kmzsync.service) -- no sudo needed.
 if $DO_RESTART; then
   log "Restarting pidjirc2kmzsync service on the Pi..."
-  ssh "${SSH_OPTIONS[@]}" "$REMOTE_USER@$REMOTE_HOST" "systemctl --user restart pidjirc2kmzsync"
+  # Install the unit file too, otherwise changes to ExecStart (e.g. --threads)
+  # never take effect: systemd runs the copy in ~/.config/systemd/user/.
+  ssh "${SSH_OPTIONS[@]}" "$REMOTE_USER@$REMOTE_HOST" \
+    "mkdir -p ~/.config/systemd/user && cp $REMOTE_PATH/pidjirc2kmzsync.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart pidjirc2kmzsync"
 else
   log "Skipping service restart (pass --restart if .py code changed)."
 fi

@@ -412,6 +412,24 @@ function renderPreviewPane() {
 // ---------------------------------------------------------------------
 async function choosePcFolder() {
     if (supportsDirectoryPicker) {
+        // If a folder was saved in an earlier session, try to re-grant access
+        // to it with a single permission prompt instead of re-picking it.
+        try {
+            const saved = await loadDirHandle().catch(() => null);
+            if (saved && !pcDirHandle) {
+                const perm = await saved.requestPermission({ mode: "readwrite" });
+                if (perm === "granted") {
+                    pcDirHandle = saved;
+                    document.getElementById("pc-folder-display").textContent = saved.name;
+                    document.getElementById("pc-folder-note").textContent = "";
+                    logInfo(`PC/Cloud folder re-authorized: ${saved.name}.`);
+                    renderPcTree();
+                    return;
+                }
+            }
+        } catch (err) {
+            logWarning(`Could not re-authorize saved folder, choose it again: ${err.message}`);
+        }
         try {
             // "readwrite" is requested up front: the Copy RC-2 -> PC action
             // needs to overwrite a chosen file in this folder, not just read it.
@@ -771,7 +789,7 @@ if (!supportsDirectoryPicker) {
                 renderPcTree();
             } else {
                 document.getElementById("pc-folder-display").textContent =
-                    `${savedHandle.name} (click Choose folder to reauthorize)`;
+                    `${savedHandle.name} (click Choose folder, then Allow, to reauthorize)`;
             }
         }
     }
