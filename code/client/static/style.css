@@ -131,6 +131,11 @@ header h1 {
     margin-bottom: 0.5rem;
 }
 
+#sort-missions-btn {
+    margin-left: auto;
+    margin-right: 0.4rem;
+}
+
 .pane-header h2 {
     font-size: 1rem;
     margin: 0;

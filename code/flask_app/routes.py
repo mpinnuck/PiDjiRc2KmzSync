@@ -119,7 +119,11 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/missions", methods=["GET"])
     def list_missions():
-        missions, err = viewmodel.list_missions()
+        # ?cached=1 reuses the backend's listing cache instead of forcing an
+        # RC-2 rescan. Without it the listing is always fresh, so an older
+        # cached copy of app.js keeps working unchanged.
+        use_cache = (request.args.get("cached") or "").strip().lower() in {"1", "true", "yes"}
+        missions, err = viewmodel.list_missions(use_cache=use_cache)
         if err:
             return jsonify({"missions": missions, "error": err}), 200
         return jsonify({"missions": missions})

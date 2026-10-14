@@ -19,10 +19,13 @@ Contains no Flask/HTTP-specific code -- could equally back a CLI.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
+import threading
 from typing import Any, Dict, List, Tuple
 
 from backends.backend_factory import BackendFactory
+from backends.rc_backend import _preview_cache_base
 from config.config_manager import ConfigManager
 from model.kmz_file import KMZFile
 from model.rc2_mission import RC2Mission
@@ -30,6 +33,12 @@ from services.battery_monitor_service import BatteryMonitorService
 from services.copy_map_service import CopyMapService
 from services.mission_verification_service import MissionVerificationService
 from services.sync_engine import SyncEngine
+
+
+# Mission slot names on the RC-2 are GUIDs. Anything else is rejected before it
+# is used to build a cache file name or an MTP path.
+_GUID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_PREVIEW_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
 class MissionViewModel:
@@ -44,6 +53,14 @@ class MissionViewModel:
         self._verification_service = MissionVerificationService()
         self._battery_monitor = BatteryMonitorService()
         self._last_error: str | None = None
+        # Mission GUIDs from the most recent listing, so a thumbnail request
+        # does not have to re-list every mission on the RC-2 first.
+        self._known_guids: set[str] = set()
+        # Thumbnails for every list row are requested at once. Only one
+        # request talks to the RC-2; the rest wait and then hit the disk cache.
+        self._preview_fetch_lock = threading.Lock()
+        # GUIDs that had no preview image on the last fetch pass; cleared on refresh.
+        self._preview_misses: set[str] = set()
 
     # ------------------------------------------------------------------
     # RC-2 root / connection
@@ -58,6 +75,8 @@ class MissionViewModel:
         self._config.save()
         old_backend = self._rc_backend
         self._rc_backend = BackendFactory.create_rc(cleaned, self._config)
+        self._known_guids = set()
+        self._preview_misses = set()
         close_old = getattr(old_backend, "close", None)
         if callable(close_old):
             try:
@@ -106,16 +125,29 @@ class MissionViewModel:
     # Mission listing
     # ------------------------------------------------------------------
 
-    def list_missions(self) -> Tuple[List[Dict[str, Any]], str | None]:
-        """Returns (missions_as_dicts, error). Each dict is JSON-serializable."""
-        invalidate = getattr(self._rc_backend, "invalidate_cache", None)
-        if callable(invalidate):
-            try:
-                invalidate()
-            except Exception:
-                pass
+    def list_missions(self, use_cache: bool = False) -> Tuple[List[Dict[str, Any]], str | None]:
+        """Returns (missions_as_dicts, error). Each dict is JSON-serializable.
+
+        By default the backend's listing cache is dropped first, so the result
+        reflects the RC-2 right now (explicit Refresh, page load, reconnect).
+        With use_cache=True the warm cache is reused: no device rescan. Use it
+        after changes the app made itself (upload, restore dummy, dummy slot):
+        uploads and deletes patch the cache in place. Associations are
+        local-only and never need a device listing.
+        """
+        if not use_cache:
+            invalidate = getattr(self._rc_backend, "invalidate_cache", None)
+            if callable(invalidate):
+                try:
+                    invalidate()
+                except Exception:
+                    pass
 
         missions, err = self._rc_backend.list_missions(self._config.rc2_folder)
+        if not err:
+            self._known_guids = {m.guid for m in missions}
+        if not use_cache:
+            self._preview_misses = set()
         dummy_guid = self._config.dummy_slot_guid.strip().lower()
 
         result = [
@@ -207,22 +239,51 @@ class MissionViewModel:
 
     def get_preview_image_path(self, guid: str) -> Tuple[bool, str]:
         """
-        Return a local cached path to the mission's preview/thumbnail
-        image, fetching it from the RC-2 if not already cached.
+        Return a local cached path to the mission's preview/thumbnail image.
 
-        Reuses RCBackend.get_preview_path unchanged -- ported straight
-        from the desktop app, it already handles the map_preview folder
-        layout (flat "<guid>.jpg" or a nested "<guid>/" subfolder) and
-        local caching.
+        Cheap path first: a preview already on the Pi's disk is returned with
+        no RC-2 access at all. Otherwise one request at a time fetches every
+        missing preview in a single MTP pass (get_preview_paths_bulk) so the
+        other thumbnail requests that arrive together are served from disk.
         """
-        missions, err = self._rc_backend.list_missions(self._config.rc2_folder)
-        if err:
-            return False, err
-        mission = self._find_mission(missions, guid)
-        if mission is None:
-            return False, f"RC-2 mission not found: {guid}"
+        guid = (guid or "").strip()
+        if not _GUID_RE.match(guid):
+            return False, "Invalid mission id."
+        root = self._config.rc2_folder
 
-        path = self._rc_backend.get_preview_path(self._config.rc2_folder, mission.guid)
+        path = self._rc_backend.get_preview_path(root, guid, allow_live_fetch=False)
+        if path:
+            return True, path
+
+        with self._preview_fetch_lock:
+            path = self._rc_backend.get_preview_path(root, guid, allow_live_fetch=False)
+            if path:
+                return True, path
+            if guid in self._preview_misses:
+                return False, "No preview image available for this mission."
+
+            guids = set(self._known_guids)
+            if guid not in guids:
+                missions, err = self._rc_backend.list_missions(root)
+                if err:
+                    return False, err
+                guids = {m.guid for m in missions}
+                self._known_guids = guids
+                if guid not in guids:
+                    return False, f"RC-2 mission not found: {guid}"
+
+            bulk = getattr(self._rc_backend, "get_preview_paths_bulk", None)
+            if callable(bulk):
+                results = bulk(root, sorted(guids))
+                for g, found in results.items():
+                    if not found:
+                        self._preview_misses.add(g)
+                path = results.get(guid)
+            else:
+                path = self._rc_backend.get_preview_path(root, guid)
+                if not path:
+                    self._preview_misses.add(guid)
+
         if not path:
             return False, "No preview image available for this mission."
         return True, path
@@ -288,11 +349,20 @@ class MissionViewModel:
         )
 
     def _clear_preview_cache_for_guid(self, guid: str) -> None:
-        clear = getattr(self._rc_backend, "clear_preview_cache", None)
-        if callable(clear):
+        """Drop only this mission's cached preview so the next view re-fetches it.
+
+        (Previously this cleared the whole preview cache after every upload,
+        forcing every thumbnail to be fetched from the RC-2 again.)
+        """
+        guid = (guid or "").strip()
+        self._preview_misses.discard(guid)
+        if not _GUID_RE.match(guid):
+            return
+        base = _preview_cache_base(self._config.rc2_folder, guid)
+        for ext in _PREVIEW_EXTENSIONS:
             try:
-                clear(self._config.rc2_folder)
-            except Exception:
+                os.remove(f"{base}{ext}")
+            except OSError:
                 pass
 
     # ------------------------------------------------------------------

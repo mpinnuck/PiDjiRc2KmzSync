@@ -8,7 +8,7 @@
 </head>
 <body>
     <header>
-        <span class="app-version">Version 3.2.0</span>
+        <span class="app-version">Version 3.3.0</span>
         <h1>PiDjiRc2KmzSync</h1>
         <div class="connection-status-row">
             <p id="status" class="status-disconnected">Checking RC-2 connection...</p>
@@ -43,6 +43,7 @@
         <section id="rc2-pane" class="pane">
             <div class="pane-header">
                 <h2>RC-2 Missions</h2>
+                <button id="sort-missions-btn" title="Toggle mission order">Sort: Newest</button>
                 <button id="refresh-missions-btn">Refresh</button>
             </div>
             <ul id="mission-list" class="tree"></ul>
@@ -77,6 +78,7 @@
         <button id="copy-btn">Copy selected KMZ &rarr; RC-2</button>
         <button id="download-btn">Copy RC-2 mission &rarr; selected PC file</button>
         <button id="associate-btn">Associate mission &harr; PC file</button>
+        <button id="restore-dummy-btn">Restore dummy</button>
         <p id="action-result"></p>
     </section>
 

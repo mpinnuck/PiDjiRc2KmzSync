@@ -50,6 +50,7 @@ async function loadDirHandle() {
 const supportsDirectoryPicker = typeof window.showDirectoryPicker === "function";
 let pcDirHandle = null;          // FileSystemDirectoryHandle, when supported
 let selectedMissionGuid = null;  // null = "use dummy slot"
+let pcFallbackFiles = [];        // files from the fallback folder input (no directory handle)
 let selectedPcFile = null;       // { name, getFile: () => Promise<File>, handle: FileSystemFileHandle|null }
 let lastMissionsData = [];       // last /api/missions response, for the preview pane
 let copyMapByGuid = {};          // target_mission_guid (lowercased) -> summary row
@@ -203,7 +204,7 @@ async function refreshStatus() {
         batteryEl.classList.toggle("battery-low", data.low_battery === true);
 
         if (connectionStateChanged) {
-            refreshMissions(false);
+            refreshMissions(false);   // new RC-2 session: always a fresh listing
         }
     } catch (err) {
         if (lastKnownConnectionState === true) {
@@ -270,7 +271,7 @@ async function setDummySlot() {
         if (data.error) throw new Error(data.error);
         document.getElementById("dummy-slot-display").textContent = data.dummy_slot_guid || "(none set)";
         logInfo(`Dummy mission slot set to ${selectedMissionGuid}.`);
-        refreshMissions();
+        refreshMissions(true, true);   // only the dummy flag changed; RC-2 untouched
     } catch (err) {
         logError(`Setting dummy slot failed: ${err.message}`);
     }
@@ -297,16 +298,18 @@ async function loadCopyMap() {
 // ---------------------------------------------------------------------
 // RC-2 mission list (left pane)
 // ---------------------------------------------------------------------
-async function refreshMissions(showLoading = true) {
+// useCache=true asks the Pi to reuse its RC-2 listing cache instead of rescanning
+// the device. Pass it after changes this app made itself (upload, dummy slot);
+// leave it false for an explicit Refresh, page load and RC-2 reconnect.
+async function refreshMissions(showLoading = true, useCache = false) {
     const listEl = document.getElementById("mission-list");
-    logInfo("Refreshing RC-2 missions.");
+    logInfo(useCache ? "Updating RC-2 missions (cached)." : "Refreshing RC-2 missions.");
     if (showLoading) {
         listEl.innerHTML = "<li>Loading...</li>";
     }
     try {
-        const res = await fetch("/api/missions");
+        const res = await fetch(useCache ? "/api/missions?cached=1" : "/api/missions");
         const data = await res.json();
-        listEl.innerHTML = "";
 
         if (data.error) {
             listEl.innerHTML = `<li>${data.error}</li>`;
@@ -316,6 +319,46 @@ async function refreshMissions(showLoading = true) {
         }
 
         lastMissionsData = data.missions;
+        renderMissionList(!useCache);   // cached refresh: let the browser reuse its thumbnails
+    } catch (err) {
+        listEl.innerHTML = "<li>Error loading missions.</li>";
+        lastMissionsData = [];
+        logError(`Loading RC-2 missions failed: ${err.message}`);
+    }
+}
+
+// "modified" = most recently modified first (default); "name" = linked PC file
+// name ascending, falling back to the GUID for missions with no association.
+let missionSortMode = "modified";
+
+function missionModifiedTime(mission) {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/.exec(mission.last_modified || "");
+    return m ? Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]) : 0;
+}
+
+function missionSortName(mission) {
+    const linked = copyMapByGuid[mission.guid.toLowerCase()];
+    return (linked && linked.source_filename) || mission.guid;
+}
+
+function sortedMissions() {
+    const list = (lastMissionsData || []).slice();
+    if (missionSortMode === "name") {
+        list.sort((a, b) => missionSortName(a).localeCompare(missionSortName(b), undefined, { sensitivity: "base" })
+            || a.guid.localeCompare(b.guid));
+    } else {
+        list.sort((a, b) => missionModifiedTime(b) - missionModifiedTime(a) || a.guid.localeCompare(b.guid));
+    }
+    return list;
+}
+
+// Draws the left-hand mission list from lastMissionsData and copyMapByGuid, with
+// no server call. bustThumbs=false lets the browser reuse thumbnails it already has.
+function renderMissionList(bustThumbs = true) {
+    const listEl = document.getElementById("mission-list");
+    const data = { missions: sortedMissions() };
+    {
+        listEl.innerHTML = "";
 
         for (const mission of data.missions) {
             const li = document.createElement("li");
@@ -331,7 +374,7 @@ async function refreshMissions(showLoading = true) {
             const img = document.createElement("img");
             img.className = "thumb";
             img.alt = "";
-            img.src = `/api/missions/${encodeURIComponent(mission.guid)}/thumbnail?t=${Date.now()}`;
+            img.src = `/api/missions/${encodeURIComponent(mission.guid)}/thumbnail` + (bustThumbs ? `?t=${Date.now()}` : "");
             img.addEventListener("error", () => { img.style.visibility = "hidden"; });
 
             const textDiv = document.createElement("div");
@@ -357,10 +400,6 @@ async function refreshMissions(showLoading = true) {
         if (data.missions.length === 0) {
             listEl.innerHTML = "<li>No missions found on RC-2.</li>";
         }
-    } catch (err) {
-        listEl.innerHTML = "<li>Error loading missions.</li>";
-        lastMissionsData = [];
-        logError(`Loading RC-2 missions failed: ${err.message}`);
     }
 }
 
@@ -518,6 +557,7 @@ function handleFallbackFolderPick(fileList) {
     // FileSystemFileHandle and so stay desktop Chrome/Edge only.
     const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".kmz"));
     logInfo(`PC/Cloud folder loaded with ${files.length} KMZ file(s).`);
+    pcFallbackFiles = files;
     const treeEl = document.getElementById("pc-tree");
     treeEl.innerHTML = "";
 
@@ -618,11 +658,57 @@ async function copySelectedToRc2() {
         }
         setActionResult(`Copied to mission ${data.mission_guid} as ${data.dest_filename}`);
         logInfo(`Copied to mission ${data.mission_guid} as ${data.dest_filename}.`);
-        refreshMissions();
+        refreshMissions(false, true);   // the upload patched the Pi's cache in place
         loadCopyMap();
     } catch (err) {
         setActionResult("Copy failed.");
         logError(`Copy to RC-2 failed: ${err.message}`);
+    }
+}
+
+// Finds dummy.kmz in the root of the chosen PC/Cloud folder (not in subfolders).
+async function findRootDummyFile() {
+    if (pcDirHandle) {
+        try {
+            const handle = await pcDirHandle.getFileHandle("dummy.kmz");
+            return await handle.getFile();
+        } catch (err) {
+            return null;
+        }
+    }
+    return pcFallbackFiles.find(file => {
+        const segments = (file.webkitRelativePath || file.name).split("/").filter(Boolean);
+        return segments.length === 2 && segments[1].toLowerCase() === "dummy.kmz";
+    }) || null;
+}
+
+async function restoreDummy() {
+    setActionResult("Restoring dummy...");
+    logInfo("Restoring dummy.kmz into the dummy RC-2 mission.");
+    try {
+        const file = await findRootDummyFile();
+        if (!file) {
+            setActionResult("dummy.kmz not found in the root of the PC/Cloud folder.");
+            logWarning("Restore dummy ignored: dummy.kmz is not in the root of the chosen PC/Cloud folder.");
+            return;
+        }
+        // No target_guid: the server copies into the configured dummy slot.
+        const formData = new FormData();
+        formData.append("file", file, "dummy.kmz");
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (data.error) {
+            setActionResult(`Error: ${data.error}`);
+            logError(`Restore dummy failed: ${data.error}`);
+            return;
+        }
+        setActionResult(`Restored dummy mission ${data.mission_guid} as ${data.dest_filename}`);
+        logInfo(`Restored dummy mission ${data.mission_guid} as ${data.dest_filename}.`);
+        refreshMissions(false, true);
+        loadCopyMap();
+    } catch (err) {
+        setActionResult("Restore dummy failed.");
+        logError(`Restore dummy failed: ${err.message}`);
     }
 }
 
@@ -712,7 +798,7 @@ async function associateSelected() {
         setActionResult(data.message || "Associated.");
         logInfo(data.message || "Mission association saved.");
         await loadCopyMap();
-        await refreshMissions(false);
+        renderMissionList(false);   // associations are browser-side data: redraw only, no RC-2 refresh
         renderPreviewPane();
     } catch (err) {
         setActionResult("Associate failed.");
@@ -726,11 +812,17 @@ async function associateSelected() {
 document.getElementById("save-rc2-root-btn").addEventListener("click", saveRc2Root);
 document.getElementById("set-dummy-slot-btn").addEventListener("click", setDummySlot);
 document.getElementById("choose-pc-folder-btn").addEventListener("click", choosePcFolder);
-document.getElementById("refresh-missions-btn").addEventListener("click", refreshMissions);
+document.getElementById("sort-missions-btn").addEventListener("click", (e) => {
+    missionSortMode = missionSortMode === "modified" ? "name" : "modified";
+    e.currentTarget.textContent = missionSortMode === "modified" ? "Sort: Newest" : "Sort: KMZ name";
+    renderMissionList(false);
+});
+document.getElementById("refresh-missions-btn").addEventListener("click", () => refreshMissions(true, false));
 document.getElementById("refresh-pc-btn").addEventListener("click", renderPcTree);
 document.getElementById("copy-btn").addEventListener("click", copySelectedToRc2);
 document.getElementById("download-btn").addEventListener("click", copyRc2ToPc);
 document.getElementById("associate-btn").addEventListener("click", associateSelected);
+document.getElementById("restore-dummy-btn").addEventListener("click", restoreDummy);
 document.getElementById("copy-log-btn").addEventListener("click", copyActivityLog);
 document.getElementById("clear-log-btn").addEventListener("click", clearActivityLog);
 document.getElementById("preview-image").addEventListener("click", openImageLightbox);

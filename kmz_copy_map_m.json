@@ -1,0 +1,5 @@
+{
+    "updated_at": "",
+    "note": "This map tracks file-level copy operations only. If RC-2 is opened with 'adjust/open as new', DJI app metadata may create a new mission record that diverges from this mapping.",
+    "by_source": {}
+}
