@@ -15,6 +15,7 @@ def create_app() -> Flask:
         static_folder="../client/static",
         static_url_path="/static",
     )
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
 
     from .routes import register_routes
     register_routes(app)

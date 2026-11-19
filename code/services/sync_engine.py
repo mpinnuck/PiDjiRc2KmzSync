@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import logging
 import shutil
 import tempfile
 from typing import Callable
 
 from model.kmz_file import KMZFile
 from model.rc2_mission import RC2Mission
+
+_LOG = logging.getLogger(__name__)
 
 
 class SyncEngine:
@@ -59,27 +62,90 @@ class SyncEngine:
     ) -> tuple[bool, str]:
         self._prepare_fresh_transfer_state(rc_backend)
         target_mission = mission
-        dest_filename, _ = self.resolve_destination_filename(rc_backend, target_mission)
 
         if not os.path.isfile(kmz_file.full_path):
             return False, f"Source file not found:\n{kmz_file.full_path}"
 
-        ok, out = rc_backend.copy_file_to_device(
-            target_mission.full_folder_path, kmz_file.full_path, dest_filename
-        )
-        if not ok:
-            return False, f"Copy failed:\n{out}"
+        ok_list, listed = rc_backend.list_slot_files(target_mission)
+        if not ok_list or not isinstance(listed, list):
+            return False, f"Cannot safely list destination slot:\n{listed}"
+        candidates = sorted(name for name in listed if name.strip().lower().endswith(".kmz"))
+        if len(candidates) > 1:
+            return False, "Destination slot contains multiple KMZ files; cannot safely choose one."
+        dest_filename = candidates[0] if candidates else f"{mission.guid}.kmz"
+        backup_path = None
+        if candidates:
+            backup_dir = os.path.join(
+                os.path.expanduser("~"), ".local", "state", "pidjirc2kmzsync", "backups"
+            )
+            try:
+                os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+                ok, payload = rc_backend.read_file_bytes_from_path(
+                    mission.full_folder_path, dest_filename
+                )
+                if not ok or not isinstance(payload, bytes) or not payload:
+                    return False, f"Backup read failed; destination unchanged:\n{payload}"
+                fd, backup_path = tempfile.mkstemp(
+                    prefix=f"{mission.guid}-", suffix=".kmz", dir=backup_dir
+                )
+                with os.fdopen(fd, "wb") as backup:
+                    backup.write(payload)
+                    backup.flush()
+                    os.fsync(backup.fileno())
+                verified, detail = verify_mtp_copy(mission, backup_path, dest_filename)
+                if not verified:
+                    os.remove(backup_path)
+                    return False, f"Backup verification failed; destination unchanged:\n{detail}"
+                dir_fd = os.open(backup_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError as exc:
+                return False, f"Cannot create durable backup; destination unchanged:\n{exc}"
 
-        if rc_backend.get_connection_mode() == "MTP":
-            verified, verify_msg = verify_mtp_copy(target_mission, kmz_file.full_path, dest_filename)
-            if not verified:
-                return False, f"MTP copy verification failed:\n{verify_msg}"
+        try:
+            ok, out = rc_backend.copy_file_to_device(
+                target_mission.full_folder_path, kmz_file.full_path, dest_filename
+            )
+            if ok:
+                verified, verify_msg = verify_mtp_copy(target_mission, kmz_file.full_path, dest_filename)
+                if not verified:
+                    ok, out = False, f"Copy verification failed:\n{verify_msg}"
+        except Exception as exc:
+            _LOG.exception("Unexpected error during mission transfer")
+            ok, out = False, str(exc)
+        if not ok:
+            if backup_path:
+                try:
+                    restored, restore_msg = rc_backend.copy_file_to_device(
+                        mission.full_folder_path, backup_path, dest_filename
+                    )
+                    if restored:
+                        restored, restore_msg = verify_mtp_copy(mission, backup_path, dest_filename)
+                except Exception as exc:
+                    _LOG.exception("Unexpected error restoring mission backup %s", backup_path)
+                    restored, restore_msg = False, str(exc)
+                status = "Previous mission restored and verified." if restored else (
+                    f"RESTORE FAILED: {restore_msg}. Manual recovery is required."
+                )
+                return False, f"Copy failed:\n{out}\n{status}\nBackup: {backup_path}"
+            try:
+                removed, remove_msg = rc_backend.delete_file(mission, dest_filename)
+            except Exception as exc:
+                _LOG.exception("Unexpected error removing partial mission")
+                removed, remove_msg = False, str(exc)
+            if not removed:
+                return False, f"Copy failed:\n{out}\nCould not remove partial file: {remove_msg}"
+            return False, f"Copy failed:\n{out}\nPartial file removed from the previously empty slot."
 
         msg = (
             f"Copied '{kmz_file.filename}'\n"
             f"  -> mission  : {target_mission.guid}\n"
             f"  -> saved as : {dest_filename}"
         )
+        if backup_path:
+            msg += f"\n  -> backup   : {backup_path}"
         record_copy_mapping(kmz_file, target_mission, dest_filename)
         clear_preview_cache_for_guid(target_mission.guid)
         return True, msg

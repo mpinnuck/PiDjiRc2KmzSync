@@ -86,6 +86,7 @@ from backends.rc_backend import (
     _promote_preview,
 )
 from config.config_manager import ConfigManager
+from model.rc2_mission import RC2Mission
 
 os.environ.setdefault("LIBMTP_DEBUG", "0")
 
@@ -257,6 +258,23 @@ class PiMTPBackend(RCBackend):
     # ==================================================================
     # _raw_* primitives
     # ==================================================================
+
+    def list_slot_files(self, mission: RC2Mission) -> Tuple[bool, List[str] | str]:
+        if not self._available:
+            return False, self._unavailable()
+        try:
+            with self._session():
+                self._drop_listing_caches()
+                folder = self._resolve_folder(mission.full_folder_path)
+                if folder is None:
+                    return False, f"MTP path not found: {mission.full_folder_path}"
+                _, files = self._child_entries(int(folder.folder_id), require_file_ids=True)
+                return True, sorted(
+                    name for entry in files
+                    if (name := _decode(getattr(entry, "filename", "")).strip())
+                )
+        except Exception as exc:
+            return False, f"MTP slot listing failed:\n{self._fmt_exc(exc)}"
 
     def _raw_list_folder(
         self, path: str
@@ -526,30 +544,14 @@ class PiMTPBackend(RCBackend):
                 if folder is None:
                     return False, f"Destination folder not found: {dest_folder}"
 
-                # Delete existing file silently before sending.
                 existing = self._find_file_in_folder(
                     int(folder.folder_id), dest_filename
                 )
                 if existing is not None:
-                    deleted = False
-                    try:
-                        self._quiet(self._mtp.delete_object, int(existing.item_id))
-                        deleted = True
-                    except Exception as exc:
-                        # Stale item IDs can occur with lagging MTP indices.
-                        # Continue and let the subsequent write proceed.
-                        _LOG.debug(
-                            "Pre-write delete failed for %s: %s",
-                            dest_filename,
-                            self._fmt_exc(exc),
-                        )
-                    if deleted:
-                        self._cache_remove_file(int(existing.item_id))
-                    else:
-                        # Deletions can be asynchronous over MTP; poll briefly
-                        # so the upload does not race the old object state.
-                        self._drop_listing_caches()
-                        self._wait_for_file_delete(int(folder.folder_id), dest_filename)
+                    self._quiet(self._mtp.delete_object, int(existing.item_id))
+                    self._drop_listing_caches()
+                    if not self._wait_for_file_delete(int(folder.folder_id), dest_filename):
+                        raise RuntimeError(f"Destination deletion could not be confirmed: {dest_filename}")
 
                 send_fn = self._mtp.mtp.LIBMTP_Send_File_From_File
                 sent: dict = {}
@@ -596,12 +598,10 @@ class PiMTPBackend(RCBackend):
                         int(folder_retry.folder_id), dest_filename
                     )
                     if existing_retry is not None:
-                        try:
-                            self._quiet(self._mtp.delete_object, int(existing_retry.item_id))
-                        except Exception:
-                            pass
+                        self._quiet(self._mtp.delete_object, int(existing_retry.item_id))
                         self._drop_listing_caches()
-                        self._wait_for_file_delete(int(folder_retry.folder_id), dest_filename)
+                        if not self._wait_for_file_delete(int(folder_retry.folder_id), dest_filename):
+                            raise RuntimeError(f"Retry deletion could not be confirmed: {dest_filename}")
 
                     retry_ret = _send_once(folder_retry)
                     folder = folder_retry
@@ -647,11 +647,14 @@ class PiMTPBackend(RCBackend):
             return False, self._unavailable()
         try:
             with self._session():
+                self._drop_listing_caches()
                 entry = self._find_file(folder_path, filename)
                 if entry is None:
                     return True, "NOT_FOUND"
                 self._quiet(self._mtp.delete_object, int(entry.item_id))
-                self._cache_remove_file(int(entry.item_id))
+                self._drop_listing_caches()
+                if not self._wait_for_file_delete(int(entry.parent_id), filename):
+                    return False, f"MTP deletion could not be confirmed: {filename}"
             return True, f"Deleted {filename}"
         except Exception as exc:
             return False, f"MTP delete failed:\n{self._fmt_exc(exc)}"
@@ -993,14 +996,15 @@ class PiMTPBackend(RCBackend):
         self._drop_listing_caches()
         self._last_read_item_ids = {}
 
-    def _wait_for_file_delete(self, folder_id: int, filename: str, timeout: float = 2.5) -> None:
+    def _wait_for_file_delete(self, folder_id: int, filename: str, timeout: float = 2.5) -> bool:
         delete_deadline = time.monotonic() + timeout
         while time.monotonic() < delete_deadline:
             if self._find_file_in_folder(folder_id, filename) is None:
-                return
+                return True
             time.sleep(0.1)
             self._file_cache = None
             self._files_by_parent_cache = None
+        return False
 
     def _ensure_connected(self) -> None:
         if self._mtp is None:
@@ -1499,14 +1503,28 @@ class PiMTPBackend(RCBackend):
     def _pull_to_path_fast(self, item_id: int, local_dest: str) -> bool:
         """Single-attempt pull path using partial reads then GetObject fallback."""
         self._last_fast_pull_exception = None
+        entry = self._device_file_entry(item_id)
+        if entry is None:
+            entry = next(
+                (item for item in self._all_files("read_size")
+                 if int(getattr(item, "item_id", -1)) == item_id),
+                None,
+            )
+        expected = int(getattr(entry, "filesize", -1))
+        if expected <= 0:
+            _LOG.warning("Cannot verify MTP read size for item_id=%s", item_id)
+            return False
 
         # DJI RC-2 firmware can reject GetObject while allowing GetPartialObject.
-        if self._pull_to_path_via_partial(item_id, local_dest):
+        if (self._pull_to_path_via_partial(item_id, local_dest)
+                and os.path.getsize(local_dest) == expected):
             return True
 
         try:
+            with open(local_dest, "wb"):
+                pass
             self._quiet(self._mtp.get_file_to_file, int(item_id), local_dest)
-            return os.path.isfile(local_dest) and os.path.getsize(local_dest) > 0
+            return os.path.isfile(local_dest) and os.path.getsize(local_dest) == expected
         except Exception as exc:
             self._last_fast_pull_exception = exc
             return False

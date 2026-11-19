@@ -342,13 +342,11 @@ class MacMTPBackend(RCBackend):
 
                 existing = self._find_file_in_folder(int(folder.folder_id), dest_filename)
                 if existing is not None:
-                    try:
-                        self._quiet(self._mtp.delete_object, int(existing.item_id))
-                    except Exception:
-                        pass
+                    self._quiet(self._mtp.delete_object, int(existing.item_id))
                     self._file_cache = None
                     self._files_by_parent_cache = None
-                    self._wait_for_file_delete(int(folder.folder_id), dest_filename)
+                    if not self._wait_for_file_delete(int(folder.folder_id), dest_filename):
+                        raise RuntimeError(f"Destination deletion could not be confirmed: {dest_filename}")
 
                 send_fn = self._mtp.mtp.LIBMTP_Send_File_From_File
 
@@ -386,13 +384,11 @@ class MacMTPBackend(RCBackend):
                         int(folder_retry.folder_id), dest_filename
                     )
                     if existing_retry is not None:
-                        try:
-                            self._quiet(self._mtp.delete_object, int(existing_retry.item_id))
-                        except Exception:
-                            pass
+                        self._quiet(self._mtp.delete_object, int(existing_retry.item_id))
                         self._file_cache = None
                         self._files_by_parent_cache = None
-                        self._wait_for_file_delete(int(folder_retry.folder_id), dest_filename)
+                        if not self._wait_for_file_delete(int(folder_retry.folder_id), dest_filename):
+                            raise RuntimeError(f"Retry deletion could not be confirmed: {dest_filename}")
 
                     retry_ret = _send_once(folder_retry)
                     if retry_ret != 0:
@@ -417,12 +413,16 @@ class MacMTPBackend(RCBackend):
             return False, self._unavailable()
         try:
             with self._session():
+                self._file_cache = None
+                self._files_by_parent_cache = None
                 entry = self._find_file(folder_path, filename)
                 if entry is None:
                     return True, "NOT_FOUND"
                 self._quiet(self._mtp.delete_object, int(entry.item_id))
                 self._file_cache = None
                 self._files_by_parent_cache = None
+                if not self._wait_for_file_delete(int(entry.parent_id), filename):
+                    return False, f"MTP deletion could not be confirmed: {filename}"
             return True, f"Deleted {filename}"
         except Exception as exc:
             return False, f"MTP delete failed:\n{self._fmt_exc(exc)}"
@@ -556,14 +556,15 @@ class MacMTPBackend(RCBackend):
         self.invalidate_transfer_caches()
         self._last_read_item_ids = {}
 
-    def _wait_for_file_delete(self, folder_id: int, filename: str, timeout: float = 2.5) -> None:
+    def _wait_for_file_delete(self, folder_id: int, filename: str, timeout: float = 2.5) -> bool:
         delete_deadline = time.monotonic() + timeout
         while time.monotonic() < delete_deadline:
             if self._find_file_in_folder(folder_id, filename) is None:
-                return
+                return True
             time.sleep(0.1)
             self._file_cache = None
             self._files_by_parent_cache = None
+        return False
 
     def _ensure_connected(self) -> None:
         if self._mtp is None:
@@ -995,11 +996,23 @@ class MacMTPBackend(RCBackend):
         return os.path.isfile(local_dest) and os.path.getsize(local_dest) > 0
 
     def _pull_to_path_fast(self, item_id: int, local_dest: str) -> bool:
-        if self._pull_to_path_via_partial(item_id, local_dest):
+        entry = next(
+            (item for item in self._all_files("read_size")
+             if int(getattr(item, "item_id", -1)) == item_id),
+            None,
+        )
+        expected = int(getattr(entry, "filesize", -1))
+        if expected <= 0:
+            _LOG.warning("Cannot verify MTP read size for item_id=%s", item_id)
+            return False
+        if (self._pull_to_path_via_partial(item_id, local_dest)
+                and os.path.getsize(local_dest) == expected):
             return True
         try:
+            with open(local_dest, "wb"):
+                pass
             self._quiet(self._mtp.get_file_to_file, int(item_id), local_dest)
-            return os.path.isfile(local_dest) and os.path.getsize(local_dest) > 0
+            return os.path.isfile(local_dest) and os.path.getsize(local_dest) == expected
         except Exception:
             return False
 

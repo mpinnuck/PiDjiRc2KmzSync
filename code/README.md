@@ -77,10 +77,8 @@ location.
   `SyncViewModel` for a request/response (not GUI-event) style, and
   implements the dummy-slot resolution: if a specific RC-2 mission is
   selected, copy there; otherwise fall back to the configured dummy
-  mission slot. Filename resolution (existing KMZ name in a non-empty
-  slot, or `<slot GUID>.kmz` for an empty slot) reuses
-  `SyncEngine.resolve_destination_filename` unchanged, and MTP copy
-  verification reuses `MissionVerificationService` unchanged.
+  mission slot. Filename resolution (  existing KMZ name in a non-empty slot, or `<slot GUID>.kmz` for an
+  empty slot). Uploads use a verified local backup and SHA-256 read-back.
 - `flask_app/` and `client/static/` — the web UI: a three-pane layout
   (RC-2 missions, PC/Cloud KMZ folder tree, and mission preview). Each UUID
   mission row includes its available preview image to make mission
@@ -90,7 +88,7 @@ location.
 
 ## Dummy-slot copy behavior (as implemented)
 
-Ported from the desktop app's exact `_on_copy` / `execute_copy` logic:
+The copy destination follows the desktop app's dummy-slot logic:
 
 - **RC-2 mission selected on the left pane** → the chosen PC/Cloud KMZ
   is copied into that mission's GUID folder, renamed to the slot's
@@ -101,6 +99,26 @@ Ported from the desktop app's exact `_on_copy` / `execute_copy` logic:
   designate via "Set selected RC-2 mission as dummy" in the UI — new
   folders can't be created on the RC-2, so this must be one of its
   existing slots), with the same filename-resolution rule.
+
+The browser shows the resolved GUID and asks for confirmation before either
+copy or restore. The server checks ZIP integrity, but does **not** validate
+DJI mission structure or flight safety. The request limit is 64 MiB; archives
+are limited to 2,048 entries and 256 MiB uncompressed.
+
+Before replacing a mission, the Pi saves and verifies a backup in
+`~/.local/state/pidjirc2kmzsync/backups/`. Backups are retained until manually
+removed. A failed transfer triggers a restore and read-back verification; if
+the device is disconnected or restoration fails, the error gives the backup
+path for manual recovery. A process or power failure may also require manual
+recovery. Keep independent backups of important missions.
+The preview is reloaded after an upload, but the controller's separate
+preview image may not yet reflect the newly uploaded KMZ.
+
+The service has no login and must only be used on a trusted private network.
+Mutating API requests require `X-Requested-With: PiDjiRc2KmzSync` to prevent
+cross-origin browser form submissions; this is not authentication. Device
+operations are serialized in the single Gunicorn worker. Native MTP operations
+do not have a guaranteed timeout and may still hang on a faulty connection.
 
 ## Requirements covered
 
@@ -125,9 +143,10 @@ needs to overwrite a file in place, not just read it) where supported
 IndexedDB so it survives across sessions without re-prompting (subject
 to the browser re-confirming permission). Safari (iPad/iPhone) doesn't
 support this API at all, so there the folder must be re-chosen each
-session via a plain `<input type="file" webkitdirectory>` picker.
+session via a plain `<input type="file" webkitdirectory>` picker when supported,
+or an individual KMZ file picker otherwise.
 
-That fallback still renders a real expandable tree, not a flat list:
+When folder picking is supported, the fallback renders an expandable tree:
 `webkitdirectory` gives each file a `webkitRelativePath` string (e.g.
 `Air3s/Home/TestMission.kmz`), and `buildFolderTreeFromFiles()` in
 `app.js` groups those paths into the same nested folder/file structure
@@ -137,6 +156,11 @@ iPad Safari as on desktop. What the fallback still can't do is persist
 the choice across sessions or serve as a **Copy RC-2 → PC** overwrite
 target, since neither is possible without a real `FileSystemFileHandle`
 — the UI notes both limitations when they apply.
+The fallback fetches the mission before starting a browser download, so an
+error stays on the page rather than navigating away. The browser controls
+where the downloaded file is saved; it does not overwrite the selected file.
+If the updater stops responding, its status badge changes and periodic pings
+continue until it reconnects.
 
 ## Mission thumbnails and mission <-> PC file associations
 

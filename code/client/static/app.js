@@ -59,6 +59,7 @@ let lastKnownConnectionState = null;
 let lastKnownLowBattery = null;
 let batteryUnavailableLogged = false;
 let piStatusWatchdogTimer = null;
+let lastKnownPiConnectionState = null;
 
 // ---------------------------------------------------------------------
 // Activity log
@@ -81,6 +82,15 @@ function logWarning(message) {
 
 function logError(message) {
     logMessage("error", message);
+}
+
+function userErrorMessage(message) {
+    if (!/NoDeviceConnected/i.test(message)) return message;
+    const guidance = "RC-2 not connected. Plug the RC-2 into the updater, then press Refresh.";
+    if (/RESTORE FAILED|Backup:|Could not remove partial file/i.test(message)) {
+        return `${guidance}\n${message}`;
+    }
+    return guidance;
 }
 
 async function copyActivityLog() {
@@ -129,6 +139,15 @@ function setPiStatus(connected) {
     piStatusEl.textContent = connected
         ? "PiRC2kmzUpdater connected"
         : "PiRC2kmzUpdater not connected";
+
+    if (lastKnownPiConnectionState !== null && lastKnownPiConnectionState !== connected) {
+        if (connected) {
+            logInfo("Updater connection re-established.");
+        } else {
+            logWarning("Updater connection lost.");
+        }
+    }
+    lastKnownPiConnectionState = connected;
 }
 
 function armPiStatusWatchdog() {
@@ -147,8 +166,10 @@ let pingInProgress = false;
 async function pingServer() {
     if (pingInProgress) return;
     pingInProgress = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), STATUS_POLL_INTERVAL_MS);
     try {
-        const res = await fetch("/api/ping", { cache: "no-store" });
+        const res = await fetch("/api/ping", { cache: "no-store", signal: controller.signal });
         if (!res.ok) throw new Error(`Ping failed (${res.status})`);
         setPiStatus(true);
         armPiStatusWatchdog();
@@ -156,6 +177,7 @@ async function pingServer() {
         // Leave the badge to the watchdog: polling continues, and the next
         // successful ping restores the green state.
     } finally {
+        window.clearTimeout(timeout);
         pingInProgress = false;
     }
 }
@@ -225,6 +247,7 @@ async function loadConfig() {
     try {
         const res = await fetch("/api/config");
         const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
         document.getElementById("rc2-root-input").value = data.rc2_root || "";
         document.getElementById("dummy-slot-display").textContent =
             data.dummy_slot_guid || "(none set)";
@@ -243,7 +266,7 @@ async function saveRc2Root() {
     try {
         const res = await fetch("/api/config/rc2-root", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Requested-With": "PiDjiRc2KmzSync" },
             body: JSON.stringify({ root }),
         });
         const data = await res.json();
@@ -264,7 +287,7 @@ async function setDummySlot() {
     try {
         const res = await fetch("/api/config/dummy-slot", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Requested-With": "PiDjiRc2KmzSync" },
             body: JSON.stringify({ guid: selectedMissionGuid }),
         });
         const data = await res.json();
@@ -284,6 +307,7 @@ async function loadCopyMap() {
     try {
         const res = await fetch("/api/copy-map");
         const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
         copyMapByGuid = {};
         for (const row of (data.rows || [])) {
             const guid = (row.target_mission_guid || "").toLowerCase();
@@ -311,10 +335,13 @@ async function refreshMissions(showLoading = true, useCache = false) {
         const res = await fetch(useCache ? "/api/missions?cached=1" : "/api/missions");
         const data = await res.json();
 
-        if (data.error) {
-            listEl.innerHTML = `<li>${data.error}</li>`;
+        if (!res.ok || data.error) {
+            const error = data.error || `HTTP ${res.status}`;
+            const errorRow = document.createElement("li");
+            errorRow.textContent = userErrorMessage(error);
+            listEl.replaceChildren(errorRow);
             lastMissionsData = [];
-            logWarning(`RC-2 mission list warning: ${data.error}`);
+            logWarning(`RC-2 mission list warning: ${error}`);
             return;
         }
 
@@ -369,7 +396,7 @@ function renderMissionList(bustThumbs = true) {
 
             const label = mission.is_dummy ? `${mission.guid} (dummy slot)` : mission.guid;
             const linked = copyMapByGuid[mission.guid.toLowerCase()];
-            const linkedNote = linked ? ` &middot; linked: ${linked.source_filename}` : "";
+            const linkedNote = linked ? ` · linked: ${linked.source_filename}` : "";
 
             const img = document.createElement("img");
             img.className = "thumb";
@@ -379,7 +406,11 @@ function renderMissionList(bustThumbs = true) {
 
             const textDiv = document.createElement("div");
             textDiv.className = "mission-text";
-            textDiv.innerHTML = `${label}<span class="meta">${mission.display_kmz_name} &middot; ${mission.last_modified}${linkedNote}</span>`;
+            textDiv.append(document.createTextNode(label));
+            const meta = document.createElement("span");
+            meta.className = "meta";
+            meta.textContent = `${mission.display_kmz_name} · ${mission.last_modified}${linkedNote}`;
+            textDiv.appendChild(meta);
 
             li.appendChild(img);
             li.appendChild(textDiv);
@@ -441,9 +472,14 @@ function renderPreviewPane() {
         rows.push(["Linked PC file", linked.source_filename]);
     }
 
-    infoEl.innerHTML = rows
-        .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
-        .join("");
+    infoEl.replaceChildren();
+    for (const [label, value] of rows) {
+        const dt = document.createElement("dt");
+        const dd = document.createElement("dd");
+        dt.textContent = label;
+        dd.textContent = value;
+        infoEl.append(dt, dd);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -566,7 +602,7 @@ function handleFallbackFolderPick(fileList) {
 
     document.getElementById("pc-folder-display").textContent = "(chosen this session only)";
     document.getElementById("pc-folder-note").textContent =
-        "Your browser doesn't support persistent folder access; re-choose the folder each visit. " +
+        "Your browser doesn't support persistent folder access; re-choose the folder or files each visit. " +
         "Copy RC-2 -> PC also isn't available with this fallback -- it can only overwrite a file " +
         "picked via a real folder handle (desktop Chrome/Edge).";
 }
@@ -632,37 +668,46 @@ async function copySelectedToRc2() {
         return;
     }
 
-    setActionResult("Copying...");
     const destinationMission = selectedMissionGuid
         ? lastMissionsData.find(mission => mission.guid === selectedMissionGuid)
         : lastMissionsData.find(mission => mission.is_dummy);
+    if (!destinationMission) {
+        setActionResult("Select an RC-2 mission or configure a dummy slot.");
+        return;
+    }
     const destinationName = destinationMission?.display_kmz_name ||
         `${destinationMission?.guid || "dummy slot"}.kmz (resolved by RC-2)`;
+    const targetGuid = destinationMission.guid;
+    if (!window.confirm(`Copy ${selectedPcFile.name} to ${targetGuid}${destinationMission.is_dummy ? " (dummy slot)" : ""}?\nExisting mission content will be replaced.`)) return;
+    setActionResult("Copying...");
+    const button = document.getElementById("copy-btn");
+    button.disabled = true;
     logInfo(`Copy selected KMZ -> RC-2: ${selectedPcFile.name} -> ${destinationName}`);
     try {
         const file = await selectedPcFile.getFile();
         const formData = new FormData();
         formData.append("file", file, selectedPcFile.name);
-        if (selectedMissionGuid) {
-            formData.append("target_guid", selectedMissionGuid);
-        }
-        // If no mission is selected, target_guid is omitted and the server
-        // falls back to the configured dummy mission slot.
+        formData.append("target_guid", targetGuid);
 
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const res = await fetch("/api/upload", { method: "POST", headers: { "X-Requested-With": "PiDjiRc2KmzSync" }, body: formData });
         const data = await res.json();
-        if (data.error) {
-            setActionResult(`Error: ${data.error}`);
-            logError(`Copy to RC-2 failed: ${data.error}`);
+        if (!res.ok || data.error) {
+            const error = data.error || `HTTP ${res.status}`;
+            setActionResult(userErrorMessage(error));
+            logError(`Copy to RC-2 failed: ${error}`);
             return;
         }
         setActionResult(`Copied to mission ${data.mission_guid} as ${data.dest_filename}`);
         logInfo(`Copied to mission ${data.mission_guid} as ${data.dest_filename}.`);
-        refreshMissions(false, true);   // the upload patched the Pi's cache in place
-        loadCopyMap();
+        logInfo(data.message);
+        await refreshMissions(false, false);
+        await loadCopyMap();
+        renderPreviewPane();
     } catch (err) {
         setActionResult("Copy failed.");
         logError(`Copy to RC-2 failed: ${err.message}`);
+    } finally {
+        button.disabled = false;
     }
 }
 
@@ -678,12 +723,20 @@ async function findRootDummyFile() {
     }
     return pcFallbackFiles.find(file => {
         const segments = (file.webkitRelativePath || file.name).split("/").filter(Boolean);
-        return segments.length === 2 && segments[1].toLowerCase() === "dummy.kmz";
+        return segments.length <= 2 && segments[segments.length - 1].toLowerCase() === "dummy.kmz";
     }) || null;
 }
 
 async function restoreDummy() {
+    const destination = lastMissionsData.find(mission => mission.is_dummy);
+    if (!destination) {
+        setActionResult("Configure a dummy mission slot first.");
+        return;
+    }
+    if (!window.confirm(`Restore dummy.kmz to ${destination.guid} (dummy slot)?\nExisting mission content will be replaced.`)) return;
     setActionResult("Restoring dummy...");
+    const button = document.getElementById("restore-dummy-btn");
+    button.disabled = true;
     logInfo("Restoring dummy.kmz into the dummy RC-2 mission.");
     try {
         const file = await findRootDummyFile();
@@ -692,23 +745,28 @@ async function restoreDummy() {
             logWarning("Restore dummy ignored: dummy.kmz is not in the root of the chosen PC/Cloud folder.");
             return;
         }
-        // No target_guid: the server copies into the configured dummy slot.
         const formData = new FormData();
         formData.append("file", file, "dummy.kmz");
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        formData.append("target_guid", destination.guid);
+        const res = await fetch("/api/upload", { method: "POST", headers: { "X-Requested-With": "PiDjiRc2KmzSync" }, body: formData });
         const data = await res.json();
-        if (data.error) {
-            setActionResult(`Error: ${data.error}`);
-            logError(`Restore dummy failed: ${data.error}`);
+        if (!res.ok || data.error) {
+            const error = data.error || `HTTP ${res.status}`;
+            setActionResult(userErrorMessage(error));
+            logError(`Restore dummy failed: ${error}`);
             return;
         }
         setActionResult(`Restored dummy mission ${data.mission_guid} as ${data.dest_filename}`);
         logInfo(`Restored dummy mission ${data.mission_guid} as ${data.dest_filename}.`);
-        refreshMissions(false, true);
-        loadCopyMap();
+        logInfo(data.message);
+        await refreshMissions(false, false);
+        await loadCopyMap();
+        renderPreviewPane();
     } catch (err) {
         setActionResult("Restore dummy failed.");
         logError(`Restore dummy failed: ${err.message}`);
+    } finally {
+        button.disabled = false;
     }
 }
 
@@ -724,42 +782,56 @@ async function copyRc2ToPc() {
         return;
     }
 
-    if (!selectedPcFile.handle) {
-        // Fallback path (Safari, or a file picked via the webkitdirectory
-        // input): there's no writable file handle, so the best we can do
-        // is a plain browser download rather than overwriting the chosen
-        // file in place.
-        setActionResult("Can't write directly to the selected file in this browser -- downloading instead.");
-        logWarning("Selected browser cannot overwrite the PC/Cloud file; starting a browser download instead.");
-        window.location.href = `/api/download/${encodeURIComponent(selectedMissionGuid)}`;
-        return;
-    }
-
+    const missionGuid = selectedMissionGuid;
+    const targetFile = selectedPcFile;
     setActionResult("Copying...");
-    logInfo(`Copying RC-2 mission ${selectedMissionGuid} to ${selectedPcFile.name}.`);
+    logInfo(`Copying RC-2 mission ${missionGuid} to ${targetFile.name}.`);
     try {
-        const res = await fetch(`/api/download/${encodeURIComponent(selectedMissionGuid)}`);
+        const res = await fetch(`/api/download/${encodeURIComponent(missionGuid)}`);
         if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            setActionResult(`Error: ${data.error || res.statusText}`);
-            logError(`Copy from RC-2 failed: ${data.error || res.statusText}`);
+            let error = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
+            try {
+                const data = await res.json();
+                if (data.error) error = data.error;
+            } catch (err) {
+                logWarning(`Could not read download error response: ${err.message}`);
+            }
+            setActionResult(userErrorMessage(error));
+            logError(`Copy from RC-2 failed: ${error}`);
             return;
         }
         const blob = await res.blob();
 
-        const permission = await selectedPcFile.handle.requestPermission({ mode: "readwrite" });
+        if (!targetFile.handle) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${missionGuid}.kmz`;
+            document.body.appendChild(link);
+            try {
+                link.click();
+            } finally {
+                link.remove();
+                window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+            }
+            setActionResult("Download started. This browser cannot overwrite the selected file directly.");
+            logWarning("Selected browser cannot overwrite the PC/Cloud file; download started instead.");
+            return;
+        }
+
+        const permission = await targetFile.handle.requestPermission({ mode: "readwrite" });
         if (permission !== "granted") {
             setActionResult("Write permission was not granted for the selected file.");
             logWarning("Copy from RC-2 cancelled: write permission was not granted.");
             return;
         }
 
-        const writable = await selectedPcFile.handle.createWritable();
+        const writable = await targetFile.handle.createWritable();
         await writable.write(blob);
         await writable.close();
 
-        setActionResult(`Copied RC-2 mission ${selectedMissionGuid} into ${selectedPcFile.name}`);
-        logInfo(`Copied RC-2 mission ${selectedMissionGuid} into ${selectedPcFile.name}.`);
+        setActionResult(`Copied RC-2 mission ${missionGuid} into ${targetFile.name}`);
+        logInfo(`Copied RC-2 mission ${missionGuid} into ${targetFile.name}.`);
     } catch (err) {
         setActionResult("Copy failed.");
         logError(`Copy from RC-2 failed: ${err.message}`);
@@ -783,16 +855,17 @@ async function associateSelected() {
     try {
         const res = await fetch(`/api/missions/${encodeURIComponent(selectedMissionGuid)}/associate`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Requested-With": "PiDjiRc2KmzSync" },
             body: JSON.stringify({
                 source_filename: selectedPcFile.name,
                 source_relative_path: selectedPcFile.name,
             }),
         });
         const data = await res.json();
-        if (data.error) {
-            setActionResult(`Error: ${data.error}`);
-            logError(`Mission association failed: ${data.error}`);
+        if (!res.ok || data.error) {
+            const error = data.error || `HTTP ${res.status}`;
+            setActionResult(userErrorMessage(error));
+            logError(`Mission association failed: ${error}`);
             return;
         }
         setActionResult(data.message || "Associated.");
@@ -854,7 +927,13 @@ if (!supportsDirectoryPicker) {
     const fallbackInput = document.createElement("input");
     fallbackInput.type = "file";
     fallbackInput.id = "pc-folder-fallback-input";
-    fallbackInput.webkitdirectory = true;
+    if ("webkitdirectory" in fallbackInput) {
+        fallbackInput.webkitdirectory = true;
+    } else {
+        fallbackInput.multiple = true;
+        fallbackInput.accept = ".kmz";
+        document.getElementById("choose-pc-folder-btn").textContent = "Choose KMZ files...";
+    }
     fallbackInput.style.display = "none";
     fallbackInput.addEventListener("change", (e) => handleFallbackFolderPick(e.target.files));
     document.body.appendChild(fallbackInput);

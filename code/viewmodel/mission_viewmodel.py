@@ -42,9 +42,6 @@ _PREVIEW_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
 class MissionViewModel:
-    MTP_SIZE_TOLERANCE_PERCENT = 10.0
-    MTP_SIZE_TOLERANCE_BYTES = 4096
-
     def __init__(self) -> None:
         self._config = ConfigManager()
         self._rc_backend = BackendFactory.create_rc(self._config.rc2_folder, self._config)
@@ -334,8 +331,6 @@ class MissionViewModel:
             mission=mission,
             source_path=source_path,
             dest_filename=dest_filename,
-            size_tolerance_percent=self.MTP_SIZE_TOLERANCE_PERCENT,
-            size_tolerance_bytes=self.MTP_SIZE_TOLERANCE_BYTES,
         )
 
     def _record_copy_mapping(self, kmz_file: KMZFile, mission: RC2Mission, dest_filename: str) -> None:
